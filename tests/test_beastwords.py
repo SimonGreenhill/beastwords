@@ -150,6 +150,68 @@ def test_partitions(request, fixture):
     assert len(partitions) == 3
     assert ascertainment == [0]
 
+
+### --------------------------------------------------------------------------------------------------###
+### Convert Sequence / Ascertainment
+### --------------------------------------------------------------------------------------------------###
+@pytest.fixture
+def apartitions():
+    return {
+        'partitions': {
+            'eye': [1, 2, 3, 4],
+            'foot': [5, 6, 7, 8, 9],
+            'hand': [10, 11, 12],
+        },
+        'ascertainment': [1, 5, 10],
+    }
+
+
+def test_convert_sequences(covarion, apartitions):
+    covarion._convert_sequences()
+    assert len(covarion.partitions) == 3, 'number of partitions has changed!'
+    # check each partition is correct (note alpha reordering)
+    assert covarion.partitions['eye'] == apartitions['partitions']['eye']
+    assert covarion.partitions['foot'] == apartitions['partitions']['foot']
+    assert covarion.partitions['hand'] == apartitions['partitions']['hand']
+    assert covarion.ascertainment == apartitions['ascertainment']
+
+
+def test_convert_sequences_xmlsequences(covarion, apartitions):
+    covarion._convert_sequences()
+    # get seqs
+    sequences = {s.get('taxon'): [_ for _ in s.get('value') if _.strip()] for s in covarion.root.xpath('.//sequence')}
+    print(sequences)
+    for values in sequences.values():
+        assert len(values) == 12
+    
+    expected = {   #Xeye Xfoot Xhand
+        'Taxon1':  '0?11 01000 011',
+        'Taxon2':  '0??1 00100 011',
+        'Taxon3':  '???? 00010 011',
+    }
+    for e in expected:
+        assert e in sequences
+        print(e, "".join(sequences[e]))
+        print(e, "".join([_ for _ in expected[e] if _.strip()]))
+        print()
+        assert sequences[e] == [_ for _ in expected[e] if _.strip()]
+
+
+def test_convert_sequences_xmluserdatatype(covarion, apartitions):
+    covarion._convert_sequences()
+    udt = [
+        e.get('characterName') for e in covarion.root.xpath('./data/userDataType')[0].getchildren()
+    ]
+    # make sure we do not have the old _ascertainment character
+    assert len(udt) == 12
+    for label in udt:
+        assert 'ascertain' not in label, 'looks like the ascertainment character is still there'
+    
+    for p in apartitions['partitions']:
+        for site in apartitions['partitions'][p]:
+            assert udt[site - 1].split("_")[0] == p
+
+
 ### --------------------------------------------------------------------------------------------------###
 ### State
 ### --------------------------------------------------------------------------------------------------###
@@ -211,12 +273,19 @@ def test_convert_prior(request, fixture, partitions):
     # have we updated the children ids?
     for p in partitions:
         # <OneOnX id="OneOnX.0:foot" name="distr"/>
-        assert has_id(m.tree, 'OneOnX', f'OneOnX.0:{p}')
+        assert has_id(m.tree, 'OneOnX', f'OneOnX:{p}'), f'Missing renamed OneOnX:{p}'
 
 
 def test_convert_prior_covarion(covarion):
-    # covarion._convert_prior()
-    pass # nothing here yet
+    covarion._convert_prior()
+    ba = get_all(covarion.tree, 'prior', 'bcov_alpha_prior.s:combined')
+    assert len(ba) == 1, 'bcov_alpha_prior.s: not renamed'
+
+    bs = get_all(covarion.tree, 'prior', 'bcov_s_prior.s:combined')
+    assert len(bs) == 1, 'bcov_s_prior.s: not renamed'
+
+    assert ba[0].get('x') == '@bcov_alpha.s:combined'
+    assert bs[0].get('x') == '@bcov_s.s:combined'
 
 
 def test_convert_prior_ctmc(ctmc, partitions):
@@ -228,8 +297,8 @@ def test_convert_prior_ctmc(ctmc, partitions):
     # </prior>
     for p in partitions:
         assert has_id(ctmc.tree, 'prior', f"GammaShapePrior.s:{p}"), "should have element for eye"
-        assert has_id(ctmc.tree, 'Exponential', f"Exponential.0:{p}")
-        assert has_id(ctmc.tree, 'mean', f"Function$Constant.0:{p}")
+        assert has_id(ctmc.tree, 'Exponential', f"Exponential:{p}")
+        assert has_id(ctmc.tree, 'mean', f"Function$Constant:{p}")
 
 
 
@@ -323,7 +392,7 @@ def test_convert_operators_ctmc(ctmc, partitions):
 
 
 ### --------------------------------------------------------------------------------------------------###
-### Tree Likelihood
+### Log
 ### --------------------------------------------------------------------------------------------------###
 @pytest.mark.parametrize("fixture", ["covarion", "ctmc"])
 def test_convert_log(request, fixture, partitions):
@@ -356,18 +425,137 @@ def test_convert_log_ctmc(ctmc, partitions):
 def test_convert_treelikelihood(request, fixture, partitions):
     m = request.getfixturevalue(fixture)
     m._convert_treelikelihood()
-    for p in partitions:
-        pass
+    # <distribution id="treeLikelihood.foot" spec="TreeLikelihood" branchRateModel="@StrictClock.c:clock" tree="@Tree.t:tree" useAmbiguities="true">
+    #     <data id="orgdata.foot" spec="FilteredAlignment" ascertained="true" excludeto="1" filter="-">
+    #         <data id="foot" spec="FilteredAlignment" data="@words" filter="4-7"/>
+    #         // COV
+    #         <userDataType id="TwoStateCovarion.1" spec="beast.base.evolution.datatype.TwoStateCovarion"/>
+    #         // CTMC
+    #         <userDataType id="Binary.1" spec="beast.base.evolution.datatype.Binary"/>
+    #     </data>
+    #     // COV
+    #     <siteModel id="SiteModel.s:foot" spec="SiteModel" gammaCategoryCount="1" mutationRate="@mutationRate.s:foot" substModel="@covarion">
+    #     // CTMC
+    #     <siteModel id="SiteModel.s:foot" spec="SiteModel" gammaCategoryCount="4" mutationRate="@mutationRate.s:foot" shape="@gammaShape.s:foot">
+    #         <parameter id="gammaShape.s:foot" spec="parameter.RealParameter" estimate="false" name="shape">1.0</parameter>
+    #         <parameter id="proportionInvariant.s:foot" spec="parameter.RealParameter" estimate="false" lower="0.0" name="proportionInvariant" upper="1.0">0.0</parameter>
+    #     </siteModel>
+    # </distribution>
     
-    # check how many substmodels -> cov/ctmc diff
+    # check we don't have extra (i.e. the old one)
+    assert len(m.tree.xpath(f".//distribution[starts-with(@id, 'treeLikelihood.')]")) == len(partitions)
     
-    # check the old substmodel was removed.
-    #print(m)
-    #assert False
+    for i, p in enumerate(partitions):
+        el = m.tree.xpath(f".//distribution[@id='treeLikelihood.{p}']")
+        # check we have all the required attribs on <distribution
+        assert el, f'missing treeLikelihood for {p}'
+        assert el[0].get('spec') == 'TreeLikelihood'
+        
+        # partition 1 should have the full branchRateModel but the others should just have a branchRateModel
+        # as an attribute
+        if i == 0:
+            assert el[0].get('branchRateModel') is None  # should not have the branchRateModel attribute
+            assert len(el[0].xpath(".//branchRateModel")) == 1
+        else:
+            assert el[0].get('branchRateModel') == '@StrictClock.c:clock'
+        
+        assert el[0].get('tree') == '@Tree.t:tree'
+        
+        # data element
+        data = el[0].xpath(".//data")
+        assert len(data) == 2, f'missing data elements for treeLikelihood.{p}: {data}'
+        
+        assert p in data[0].get('id')
+        assert data[0].get('spec') == 'FilteredAlignment'
+        assert data[0].get('ascertained') == 'true'
+        assert data[0].get('excludeto') == '1'
+        assert data[0].get('filter') == '-'
+        
+        # nested data element
+        assert data[1].getparent() == data[0]
+        assert data[1].get('id') == p
+        assert data[1].get('spec') == 'FilteredAlignment'
+        assert data[1].get('filter') != '-'
 
-#def test_convert_treelikelihood_covarion(covarion):
-#    pass # nothing here yet
-#
-#
-#def test_convert_treelikelihood_ctmc(ctmc):
-#    pass
+        # site model
+        siteModel = el[0].xpath('.//siteModel')
+        assert siteModel, f'missing siteModel for {p}'
+        assert siteModel[0].get('id') == f'SiteModel.s:{p}'
+        assert siteModel[0].get('spec') == 'SiteModel'
+        assert siteModel[0].get('gammaCategoryCount') == '1'
+        assert siteModel[0].get('mutationRate') == f'@mutationRate.s:{p}'
+        
+        assert siteModel[0].get('substModel')   # Value is tested in covarion/ctmc models
+        
+        # check siteModel parameters
+        gs, pi = siteModel[0].getchildren()
+        assert gs is not None
+        assert gs.get('id') == f"gammaShape.s:{p}"
+        assert gs.get('spec') == "parameter.RealParameter"
+        assert gs.get('name') == "shape"
+
+        assert pi is not None
+        assert pi.get('id') == f"proportionInvariant.s:{p}"
+        assert pi.get('spec') == "parameter.RealParameter"
+        assert pi.get('name') == "proportionInvariant"
+    
+
+def test_convert_treelikelihood_covarion(covarion, partitions):
+    covarion._convert_treelikelihood()
+    # check all userDataTypes
+    #<userDataType id="TwoStateCovarion.1" spec="beast.base.evolution.datatype.TwoStateCovarion"/>
+    udt = covarion.root.xpath(".//distribution[@spec='TreeLikelihood']//userDataType")
+    assert len(udt) == len(partitions)
+    
+    for i, u in enumerate(udt):
+        assert u.get('id') == f'userDataType:{partitions[i]}'
+        assert u.get('spec') == 'beast.base.evolution.datatype.TwoStateCovarion'
+
+    # check that we have useAmbiguities=True
+    for p in partitions:
+        d = covarion.root.xpath(f".//distribution[@id='treeLikelihood.{p}']")
+        assert d[0].get('useAmbiguities') == 'true'
+
+    for p in partitions:
+        sm = covarion.root.xpath(f".//distribution/siteModel[@id='SiteModel.s:{p}']")
+        assert len(sm), f'siteModel.s:{p} missing'
+        assert sm[0].get('substModel') == '@covarion:combined'
+
+
+def test_convert_treelikelihood_ctmc(ctmc, partitions):
+    ctmc._convert_treelikelihood()
+    # check that we have useAmbiguities=False
+    for p in partitions:
+        d = ctmc.root.xpath(f".//distribution[@id='treeLikelihood.{p}']")
+        assert d[0].get('useAmbiguities', 'false') == 'false'
+    
+    # check userDataType
+    udt = ctmc.root.xpath(".//distribution[@spec='TreeLikelihood']//userDataType")
+    assert len(udt) == len(partitions)
+    for i, u in enumerate(udt):
+        assert u.get('id') == f'userDataType:{partitions[i]}'
+        assert u.get('spec') == 'beast.base.evolution.datatype.Binary'
+    
+    # check substModel
+    for p in partitions:
+        sm = ctmc.root.xpath(f".//distribution/siteModel[@id='SiteModel.s:{p}']")
+        assert len(sm), f'siteModel.s:{p} missing'
+        assert sm[0].get('substModel') == f'@CTMC.s:{p}'
+
+
+### --------------------------------------------------------------------------------------------------###
+### Misc
+### --------------------------------------------------------------------------------------------------###
+@pytest.mark.parametrize("fixture", ["covarion", "ctmc"])
+def test_clock(request, fixture):
+    m = request.getfixturevalue(fixture)
+    # we should have a clock before we change things
+    clock = m.root.xpath(".//branchRateModel")
+    assert len(clock) == 1, 'missing clock??'
+    
+    m.convert()
+    
+    clock = m.root.xpath(".//branchRateModel")
+    assert len(clock) == 1, 'missing clock'
+
+    

@@ -10,6 +10,8 @@ from warnings import warn
 class Converter(object):
     
     userDataType_spec = '?'
+    useAmbiguities = 'false'
+    
     
     def __init__(self, xmlfile, tree=None, root=None, model=None):
         self.xmlfile = xmlfile
@@ -40,7 +42,7 @@ class Converter(object):
             words.append((e.get('characterName'), e.get('id')))
         return words
     
-    def patch(self, element, newattrib, update=False):
+    def patch(self, element, newattrib={}, update=False):
         """
         Clones `element`, updating it with key:values in `newattrib`
         
@@ -112,18 +114,105 @@ class Converter(object):
         runs.append(f"{start}-{prev}" if start != prev else f"{start}")
         return ",".join(runs)
 
+    def _convert_sequences(self):  # i.e. add ascertainment characters into each partition
+        # get sequences
+        sequences = {s.get('id'): s.get('value') for s in self.root.xpath('.//sequence')}
+        # convert sequences in XML to dictionary of {'partition': {'taxon1': '...', 'taxon2': '...'}}
+        # n.b. this will ignore the old 'ascertainment' character (effectively deleting it) 
+        # as it's not in the list of partitions
+        new = defaultdict(lambda: defaultdict(list))
+        for taxon in sequences:
+            for partition, sites in self.partitions.items():
+                for s in sites:
+                    new[partition][taxon].append(sequences[taxon][s])
+        
+        # loop over partitions, create an ascertainment character and insert it at pos 0
+        for partition in new:
+            for taxon in new[partition]:
+                # identify ascertainment character
+                if all(c == '?' for c in new[partition][taxon]):
+                    ascertainment = '?'
+                elif all(c == '-' for c in new[partition][taxon]):
+                    ascertainment = '-'
+                else:
+                    ascertainment = '0'
+                new[partition][taxon].insert(0, ascertainment)
+        
+        # ok, now regenerate sequences and figure out positions
+        positions = [] # we have `taxon` initialised above, we'll count that one
+        for oldseq in self.root.xpath('.//sequence'):
+            seqid = oldseq.get('id')
+            newseq = etree.Element("sequence", id=seqid, taxon=oldseq.get('taxon'), spec="Sequence", totalcount="2")
+            value = []
+            for partition in sorted(new):
+                value.append("".join(new[partition][seqid]))
+                
+                if oldseq.get('id') == taxon:
+                    positions.extend([
+                        (partition, i) for i, _ in enumerate(new[partition][seqid])
+                    ])
+            
+            newseq.set('value', " ".join(value))
+            oldseq.getparent().append(newseq)  # add new sequence
+            oldseq.getparent().remove(oldseq)  # remove old seq
+        
+        # generate userDataType -- find old userDataType, and update
+        # while we're here we will update ascertainment/partitions
+        self.partitions, self.ascertainment = defaultdict(list), []
+        udt = self.root.xpath('./data/userDataType')[0]
+        # remove old chars
+        for o in udt.getchildren():
+            udt.remove(o)
+        
+        for i, (char, index) in enumerate(positions, 1):
+            o = etree.Element("charstatelabels",
+                id=f"UserDataType.{i}",
+                spec="beast.base.evolution.datatype.UserDataType",
+                characterName=f"{char}_{index}",
+                codeMap="",
+                states="-1",
+                value="")
+            udt.append(o)
+            
+            self.partitions[char].append(i)
+            if index == 0:
+                self.ascertainment.append(i)
+        
     def _convert_state(self):
         self.replace(".//parameter[starts-with(@id, 'mutationRate.s:')]", id="mutationRate.s:{}")
 
     def _convert_prior(self):
-        self.replace(
-            ".//prior[starts-with(@id, 'MutationRatePrior.s:')]", 
-            id="MutationRatePrior.s:{}", x="@mutationRate.s:{}")
+        # <prior id="MutationRatePrior.s:eye" name="distribution" x="@mutationRate.s:eye">
+        #     <OneOnX id="OneOnX.0" name="distr"/>
+        # </prior>
+        path = ".//prior[starts-with(@id, 'MutationRatePrior.s:')]"
+        self.replace(path, id="MutationRatePrior.s:{}", x="@mutationRate.s:{}")
+        # and update internal OneOnX
+        for o in self.root.xpath(path):
+            p = o.get('id').split(":")[1]
+            o.getchildren()[0].set('id', f"OneOnX:{p}")
 
     def _convert_substmodel(self):
         pass
 
     def _convert_treelikelihood(self):
+        # <distribution id="treeLikelihood.foot" spec="TreeLikelihood" branchRateModel="@StrictClock.c:clock" tree="@Tree.t:tree" useAmbiguities="true">
+        #     <data id="orgdata.foot" spec="FilteredAlignment" ascertained="true" excludeto="1" filter="-">
+        #         <data id="foot" spec="FilteredAlignment" data="@words" filter="4-7"/>
+        #         // COV
+        #         <userDataType id="TwoStateCovarion.1" spec="beast.base.evolution.datatype.TwoStateCovarion"/>
+        #         // CTMC
+        #         <userDataType id="Binary.1" spec="beast.base.evolution.datatype.Binary"/>
+        #     </data>
+        #     // COV
+        #     <siteModel id="SiteModel.s:foot" spec="SiteModel" gammaCategoryCount="1" mutationRate="@mutationRate.s:foot" substModel="@covarion">
+        #     // CTMC
+        #     <siteModel id="SiteModel.s:foot" spec="SiteModel" gammaCategoryCount="4" mutationRate="@mutationRate.s:foot" shape="@gammaShape.s:foot">
+        #         <parameter id="gammaShape.s:foot" spec="parameter.RealParameter" estimate="false" name="shape">1.0</parameter>
+        #         <parameter id="proportionInvariant.s:foot" spec="parameter.RealParameter" estimate="false" lower="0.0" name="proportionInvariant" upper="1.0">0.0</parameter>
+        #     </siteModel>
+        # </distribution>
+        
         # find data/sequence
         data = self.root.xpath('.//data[@spec="FilteredAlignment"]')
         if len(data) > 1:
@@ -132,12 +221,15 @@ class Converter(object):
         seq = data.get('data')
 
         # find brm
-        brm = self.root.xpath('.//branchRateModel')[0].get('id')
+        brm = self.root.xpath('.//branchRateModel')[0]
         assert brm is not None, "Unable to find branchRateModel"
+        brm_id = brm.get('id')
+        # -> we will move this into the first partition later
 
         # find tree
-        tree = self.root.xpath('.//init')[0].get('initial')
+        tree = self.root.xpath('.//init')[0]
         assert tree is not None, "Unable to find tree"
+        tree_id = tree.get('initial')
         
         # find substModel
         substModel = self.root.xpath(".//substModel")[0]
@@ -163,11 +255,17 @@ class Converter(object):
         for i, p in enumerate(self.partitions):
             # 1. construct <distribution>
             distribution = etree.Element("distribution",
-                id=f"treeLikelihood.{p}", 
-                branchRateModel=brm,
-                tree=tree,
-                useAmbiguities='true')
+                id=f"treeLikelihood.{p}",
+                spec="TreeLikelihood",
+                tree=f"{tree_id}",
+                useAmbiguities=self.useAmbiguities)
             
+            # add the branch rate model to the first partition
+            if i == 0:
+                distribution.append(self.patch(brm))  # use patch just to clone
+            else:
+                distribution.set('branchRateModel', f"@{brm_id}") 
+                
             # 2. construct <data>
             chars = self.get_partition_range(p)
             d1 = etree.Element("data",
@@ -177,7 +275,7 @@ class Converter(object):
             d2 = etree.SubElement(d1, "data", id=f"{p}", spec="FilteredAlignment", data=f"{seq}",
                 filter=self.get_partition_range(p)
             )
-            udt = etree.SubElement(d2, "userDataType", id=f"{p}", spec=self.userDataType_spec)
+            udt = etree.SubElement(d2, "userDataType", id=f"userDataType:{p}", spec=self.userDataType_spec)
             
             distribution.append(d1)
 
@@ -194,7 +292,7 @@ class Converter(object):
                 id=f"SiteModel.s:{p}",
                 spec="SiteModel",
                 gammaCategoryCount="%d" % self.get_gamma(),
-                mutationRate="@mutationRate.s:{p}",
+                mutationRate=f"@mutationRate.s:{p}",
                 substModel=f"@{smid}")
             
             p1 = etree.SubElement(siteModel, "parameter",
@@ -205,7 +303,6 @@ class Converter(object):
                 id=f"proportionInvariant.s:{p}", spec="parameter.RealParameter", estimate="false",
                 lower="0.0", name="proportionInvariant", upper="1.0"
             )
-                
             p2.text = '0.0'
             
             distribution.append(siteModel)
@@ -214,6 +311,8 @@ class Converter(object):
         # cleanup old stuff.
         data.getparent().remove(data)
         treeLh.getparent().remove(treeLh)
+        brm.getparent().remove(brm)
+
 
     def _convert_operators(self):
         self.replace(
@@ -227,6 +326,7 @@ class Converter(object):
         self.replace(".//log[starts-with(@idref, 'mutationRate.s')]", idref="mutationRate.s:{}")
     
     def convert(self):
+        self._convert_sequences() # should go first i think
         self._convert_state()
         self._convert_prior()
         self._convert_treelikelihood()
@@ -240,11 +340,22 @@ class Converter(object):
         el = el if el is not None else self.tree
         etree.indent(el)  # needed to 'reset' the indentation
         return etree.tostring(el, pretty_print=True, encoding='unicode')
+    
+    def to_file(self, filename):
+        etree.indent(self.tree)  # needed to 'reset' the indentation
+        self.tree.write(
+            filename,
+            xml_declaration=True,
+            encoding="UTF-8",
+            standalone="no",
+            pretty_print=True
+        )
 
 
 class CovarionConverter(Converter):
     
     userDataType_spec = "beast.base.evolution.datatype.TwoStateCovarion"
+    useAmbiguities = 'true'
     
     def _convert_state(self):
         super()._convert_state()
@@ -271,6 +382,17 @@ class CovarionConverter(Converter):
         })
         sm = self.patch_child_ids(sm, 'combined')
         yield sm
+    
+    def _convert_prior(self):
+        super()._convert_prior()
+        self.patch(
+            self.root.xpath(".//prior[starts-with(@id, 'bcov_alpha_prior.s:')]")[0],
+            {'id': 'bcov_alpha_prior.s:combined', 'x': "@bcov_alpha.s:combined"},
+            update=True)
+        self.patch(
+            self.root.xpath(".//prior[starts-with(@id, 'bcov_s_prior.s:')]")[0],
+            {'id': 'bcov_s_prior.s:combined', 'x': "@bcov_s.s:combined"},
+            update=True)
 
     def _convert_operators(self):
         super()._convert_operators()
@@ -311,7 +433,8 @@ class CovarionConverter(Converter):
 class CTMCConverter(Converter):
     
     userDataType_spec = "beast.base.evolution.datatype.Binary"
-
+    useAmbiguities = 'false'
+    
     def _convert_state(self):
         super()._convert_state()
         # already have mutationRate.*
@@ -323,7 +446,24 @@ class CTMCConverter(Converter):
     def _convert_prior(self):
         super()._convert_prior()
         # already have MutationRatePrior.*, add GammaShapePrior
-        self.replace(".//prior[starts-with(@id, 'GammaShapePrior.s:')]", id="GammaShapePrior.s:{}")
+        # <prior id="GammaShapePrior.s:foot" name="distribution" x="@gammaShape.s:foot">
+        #     <Exponential id="Exponential.1" name="distr">
+        #         <mean id="Function$Constant.1" spec="Function$Constant" value="1.0"/>
+        #     </Exponential>
+        # </prior>
+        path = ".//prior[starts-with(@id, 'GammaShapePrior.s:')]"
+        self.replace(path, id="GammaShapePrior.s:{}", x="@gammaShape.s:{}")
+        
+        # and update internal Exponential
+        for o in self.root.xpath(path):
+            p = o.get('id').split(":")[1]
+            exp = o.getchildren()[0]
+            old_id = exp.get('id').split(".")[0]
+            exp.set('id', f"{old_id}:{p}")
+            # and the nested <mean>
+            old_id = exp.getchildren()[0].get('id').split(".")[0]
+            exp.getchildren()[0].set('id', f"{old_id}:{p}")
+
 
     def _convert_substmodel(self):
         sm = self.root.xpath(".//substModel")[0]
@@ -360,7 +500,7 @@ def main():
     xml = Converter.from_file(args.input)
     xml.convert()
     print(xml)
-    print("TODO write")
+    xml.to_file(args.output)
 
 if __name__ == "__main__":
     main()
