@@ -410,7 +410,7 @@ class CovarionConverter(Converter):
             self.root.xpath(".//operator[starts-with(@id, 'frequenciesDelta.s:')]")[0],
             {'id': 'frequenciesDelta.s:combined'},
             update=True)
-        self.patch(op.getchildren()[0], {'idref': "@frequencies.s:combined"}, update=True)
+        self.patch(op.getchildren()[0], {'idref': "frequencies.s:combined"}, update=True)
     
     def _convert_log(self):
         super()._convert_log()

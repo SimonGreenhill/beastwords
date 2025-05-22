@@ -378,7 +378,7 @@ def test_convert_operators_covarion(covarion):
     assert opAlpha[0].get('parameter') == "@bcov_alpha.s:combined", 'parameter -> @bcov_alpha.s:combined?'
     assert opSwitch[0].get('parameter') == "@bcov_s.s:combined", 'parameter -> @bcov_s.s:combined?'
     
-    assert opFD[0].getchildren()[0].get('idref') == "@frequencies.s:combined", 'frequenciesDelta not updated'
+    assert opFD[0].getchildren()[0].get('idref') == "frequencies.s:combined", 'frequenciesDelta not updated'
 
 
 def test_convert_operators_ctmc(ctmc, partitions):
