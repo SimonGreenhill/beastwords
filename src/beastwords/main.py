@@ -192,8 +192,8 @@ class Converter(object):
             p = o.get('id').split(":")[1]
             o.getchildren()[0].set('id', f"OneOnX:{p}")
 
-    def _convert_substmodel(self):
-        pass
+    def _add_substmodel(self, partition, siteModel):
+        return siteModel
 
     def _convert_treelikelihood(self):
         # <distribution id="treeLikelihood.foot" spec="TreeLikelihood" branchRateModel="@StrictClock.c:clock" tree="@Tree.t:tree" useAmbiguities="true">
@@ -242,15 +242,6 @@ class Converter(object):
         
         # add the required substModels and put them after the state
         state = self.root.xpath(f".//state[@id='state']")[0]
-        substmodel_ids = []
-        for s in self._convert_substmodel():
-            parent = state.getparent()
-            index = parent.index(state)
-            parent.insert(index + 1, s)
-            substmodel_ids.append(s.get('id'))
-            
-        # remove the old one
-        substModel.getparent().remove(substModel)
         
         for i, p in enumerate(self.partitions):
             # 1. construct <distribution>
@@ -263,6 +254,7 @@ class Converter(object):
             # add the branch rate model to the first partition
             if i == 0:
                 distribution.append(self.patch(brm))  # use patch just to clone
+                brm.getparent().remove(brm)  # now delete brm
             else:
                 distribution.set('branchRateModel', f"@{brm_id}") 
                 
@@ -278,26 +270,16 @@ class Converter(object):
             udt = etree.SubElement(d2, "userDataType", id=f"userDataType:{p}", spec=self.userDataType_spec)
             
             distribution.append(d1)
-
-            # figure out id of substmodel
-            if len(substmodel_ids) == 1:    # covarion
-                smid = substmodel_ids[0] 
-            elif len(substmodel_ids) == len(self.partitions):  # one per partition
-                smid = substmodel_ids[i]
-            else:
-                raise ValueError("Substitution Models != Partition count")
             
             # add siteModel
             siteModel = etree.Element("siteModel",
                 id=f"SiteModel.s:{p}",
                 spec="SiteModel",
                 gammaCategoryCount="%d" % self.get_gamma(),
-                mutationRate=f"@mutationRate.s:{p}",
-                substModel=f"@{smid}")
+                mutationRate=f"@mutationRate.s:{p}")
             
-            p1 = etree.SubElement(siteModel, "parameter",
-                id=f"gammaShape.s:{p}", spec="parameter.RealParameter", estimate="false", name="shape")
-            p1.text = '1.0'
+            # add substModel
+            self._add_substmodel(p, siteModel)
 
             p2 = etree.SubElement(siteModel, "parameter",
                 id=f"proportionInvariant.s:{p}", spec="parameter.RealParameter", estimate="false",
@@ -311,8 +293,7 @@ class Converter(object):
         # cleanup old stuff.
         data.getparent().remove(data)
         treeLh.getparent().remove(treeLh)
-        brm.getparent().remove(brm)
-
+        substModel.getparent().remove(substModel)
 
     def _convert_operators(self):
         self.replace(
@@ -356,6 +337,7 @@ class CovarionConverter(Converter):
     
     userDataType_spec = "beast.base.evolution.datatype.TwoStateCovarion"
     useAmbiguities = 'true'
+    has_siteModel = False
     
     def _convert_state(self):
         super()._convert_state()
@@ -372,16 +354,30 @@ class CovarionConverter(Converter):
         el.set('id', "frequencies.s:combined")
         return el
     
-    def _convert_substmodel(self):
-        sm = self.root.xpath(".//substModel")[0]
-        sm = self.patch(sm, {
-            'id': 'covarion:combined',
-            'alpha': '@bcov_alpha.s:combined',
-            'switchRate': '@bcov_s.s:combined',
-            'vfrequencies': '@frequencies.s:combined'
-        })
-        sm = self.patch_child_ids(sm, 'combined')
-        yield sm
+    def _add_substmodel(self, partition, siteModel):
+        if self.has_siteModel: # just add an attribute
+            siteModel.set("substModel", "@covarion:combined")
+        else:  # add the whole model
+            # 1. find old one
+            old = self.root.xpath(".//*/substModel")
+            assert len(old) == 1, f"Expected 1 substModel, got {old}"
+            new = self.patch(old[0], {
+                'id': 'covarion:combined',
+                'alpha': "@bcov_alpha.s:combined",
+                'switchRate': "@bcov_s.s:combined",
+                'vfrequencies': "@frequencies.s:combined",
+            })
+            new = self.patch_child_ids(new, 'combined')
+            siteModel.insert(0, new)
+
+            # add gammaShape parameter
+            gammaShape = etree.SubElement(siteModel, "parameter",
+               id=f"gammaShape.s:{partition}", spec="parameter.RealParameter", estimate="false", name="shape")
+            gammaShape.text = '1.0'
+            siteModel.append(gammaShape)
+
+            self.has_siteModel = True  # set flag
+        return siteModel
     
     def _convert_prior(self):
         super()._convert_prior()
@@ -465,29 +461,39 @@ class CTMCConverter(Converter):
             exp.getchildren()[0].set('id', f"{old_id}:{p}")
 
 
-    def _convert_substmodel(self):
-        sm = self.root.xpath(".//substModel")[0]
+    def _add_substmodel(self, partition, siteModel):
         # ctmc gets one substModel per word
-        for p in self.partitions:
-            new = self.patch_child_ids(sm, p)
-            # get freq subelement and change frequencies="@freqParameter.s:.."
-            f = new.xpath('frequencies')[0]
-            f.set('frequencies', f'@freqParameter.s:{p}')
-            yield new
+        old = self.root.xpath(".//*/substModel")  # don't care which one it is 
+        new = self.patch_child_ids(old[0], partition)
+        # get freq subelement and change frequencies="@freqParameter.s:.."
+        #  <frequencies id="estimatedFreqs.s:eye" spec="Frequencies" frequencies="@freqParameter.s:overall"/>
+        f = new.xpath('frequencies')[0]
+        f.set('frequencies', f'@freqParameter.s:{partition}')
+        siteModel.insert(0, new)
+        siteModel.set('shape', f"@gammaShape.s:{partition}")
+        return siteModel
     
     def _convert_operators(self):
         super()._convert_operators()
 
+        self.replace(".//operator[starts-with(@id, 'gammaShapeScaler.s:')]", id="gammaShapeScaler.s:{}")
+
         self.replace(".//operator[starts-with(@id, 'FrequenciesExchanger.s:')]", id="FrequenciesExchanger.s:{}")
-        # patch internal freqParameters
+
+        # patch internal freqParameters and gammaShapeScaler
         for p in self.partitions:
             op = self.root.xpath(f".//operator[@id='FrequenciesExchanger.s:{p}']")[0]
             self.patch(op.getchildren()[0], {'idref': f"freqParameter.s:{p}"}, update=True)
+
+            op = self.root.xpath(f".//operator[@id='gammaShapeScaler.s:{p}']")[0]
+            op.set("parameter", f"@gammaShape.s:{p}")
 
     def _convert_log(self):
         super()._convert_log()
         # <log idref="freqParameter.s:hand"/>
         self.replace(".//log[starts-with(@idref, 'freqParameter.s')]", idref="freqParameter.s:{}")
+        # <log idref="gammaShape.s:overall"/>
+        self.replace(".//log[starts-with(@idref, 'gammaShape.s')]", idref="gammaShape.s:{}")
 
 
 def main():
@@ -499,7 +505,6 @@ def main():
     
     xml = Converter.from_file(args.input)
     xml.convert()
-    print(xml)
     xml.to_file(args.output)
 
 if __name__ == "__main__":

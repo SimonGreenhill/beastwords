@@ -306,46 +306,56 @@ def test_convert_prior_ctmc(ctmc, partitions):
 ### --------------------------------------------------------------------------------------------------###
 ### substModel
 ### --------------------------------------------------------------------------------------------------###
-def test_convert_substmodel_covarion(covarion):
-    sm = list(covarion._convert_substmodel())
-    assert len(sm) == 1
-    assert sm[0].get('id') == 'covarion:combined'
-    assert sm[0].get('spec') == 'BinaryCovarion'
-    assert sm[0].get('alpha') == '@bcov_alpha.s:combined'
-    assert sm[0].get('switchRate') == '@bcov_s.s:combined'
-    assert sm[0].get('vfrequencies') == '@frequencies.s:combined'
 
-    assert has_id(sm[0], 'parameter', f"hiddenfrequencies.s:combined")
-    assert has_id(sm[0], 'frequencies', f"dummyfrequencies.s:combined")
-
-
-def test_convert_substmodel_ctmc(ctmc, partitions):
-    sm = list(ctmc._convert_substmodel())
-    assert len(sm) == 3
-    
-    # squash these into one element
-    xml = etree.Element("root")
-    for s in sm:
-        xml.append(s)
-    
-    # we should have one sm per partition
+@pytest.fixture
+def siteModels(partitions):
+    out = []
     for p in partitions:
-        t = xml.xpath(f".//substModel[@id='CTMC.s:{p}']")[0]
-        
-        assert t.get('id') == f'CTMC.s:{p}'
-        assert t.get('spec') == 'GeneralSubstitutionModel'
-    
-        assert len(t.getchildren()) == 2
+        out.append(etree.Element("siteModel",
+            id=f"SiteModel.s:{p}", 
+            spec="SiteModel", 
+            gammaCategoryCount="1", 
+            mutationRate=f"@mutationRate.s:{p}"))
+    return out
+
+
+def test_add_substmodel_covarion(covarion, siteModels, partitions):
+    for i, p in enumerate(partitions):
+        # first time should add a full substModel
+        site = covarion._add_substmodel(p, siteModels[i])
+        if p == 'hand':
+            sub = site.getchildren()[0]
+            assert sub.get('id') == 'covarion:combined'
+            assert sub.get('spec') == 'BinaryCovarion'
+            assert sub.get('alpha') == '@bcov_alpha.s:combined'
+            assert sub.get('switchRate') == '@bcov_s.s:combined'
+            assert sub.get('vfrequencies') == '@frequencies.s:combined'
+
+            assert has_id(sub, 'parameter', f"hiddenfrequencies.s:combined")
+            assert has_id(sub, 'frequencies', f"dummyfrequencies.s:combined")
+        # next times should just add the attrib
+        else:
+            assert site.get('substModel') == '@covarion:combined'
+
+
+def test_add_substmodel_ctmc(ctmc, siteModels, partitions):
+    for i, p in enumerate(partitions):
+        # should add specific siteModel for each partition
+        site = ctmc._add_substmodel(p, siteModels[i])
+        sub = site.getchildren()[0]
+        assert sub.get('id') == f'CTMC.s:{p}'
+        assert sub.get('spec') == 'GeneralSubstitutionModel'
+
+        assert len(sub.getchildren()) == 2
         # check subelements
-        param = t.xpath('.//parameter')[0]
+        param = sub.xpath('.//parameter')[0]
         assert param.get('id') == f"rates.s:{p}"
         assert param.get('spec') == "parameter.RealParameter"
-    
-        freqs = t.xpath('.//frequencies')[0]
+        
+        freqs = sub.xpath('.//frequencies')[0]
         assert freqs.get('id') == f"estimatedFreqs.s:{p}"
         assert freqs.get('spec') == "Frequencies"
         assert freqs.get('frequencies') == f"@freqParameter.s:{p}"
-    
 
 
 ### --------------------------------------------------------------------------------------------------###
@@ -389,6 +399,9 @@ def test_convert_operators_ctmc(ctmc, partitions):
         assert op[0].getchildren()[0].get('idref') == f"freqParameter.s:{p}", "%s != %s" % (
             op[0].getchildren()[0].get('idref'), f"freqParameter.s:{p}")
 
+        gss = ctmc.tree.xpath(f".//operator[@id='gammaShapeScaler.s:{p}']")
+        assert gss, 'Missing an expected gammaShapeScaler'
+        
 
 
 ### --------------------------------------------------------------------------------------------------###
@@ -415,6 +428,7 @@ def test_convert_log_ctmc(ctmc, partitions):
     ctmc._convert_log()
     for p in partitions:
         assert ctmc.tree.xpath(f".//log[@idref='freqParameter.s:{p}']")
+        assert ctmc.tree.xpath(f".//log[@idref='gammaShape.s:{p}']")
     
     
 
@@ -485,16 +499,8 @@ def test_convert_treelikelihood(request, fixture, partitions):
         assert siteModel[0].get('gammaCategoryCount') == '1'
         assert siteModel[0].get('mutationRate') == f'@mutationRate.s:{p}'
         
-        assert siteModel[0].get('substModel')   # Value is tested in covarion/ctmc models
-        
-        # check siteModel parameters
-        gs, pi = siteModel[0].getchildren()
-        assert gs is not None
-        assert gs.get('id') == f"gammaShape.s:{p}"
-        assert gs.get('spec') == "parameter.RealParameter"
-        assert gs.get('name') == "shape"
-
-        assert pi is not None
+        # check siteModel parameter proportionInvariant
+        pi = siteModel[0].xpath(f".//parameter[@id='proportionInvariant.s:{p}']")[0]
         assert pi.get('id') == f"proportionInvariant.s:{p}"
         assert pi.get('spec') == "parameter.RealParameter"
         assert pi.get('name') == "proportionInvariant"
@@ -519,7 +525,17 @@ def test_convert_treelikelihood_covarion(covarion, partitions):
     for p in partitions:
         sm = covarion.root.xpath(f".//distribution/siteModel[@id='SiteModel.s:{p}']")
         assert len(sm), f'siteModel.s:{p} missing'
-        assert sm[0].get('substModel') == '@covarion:combined'
+        # only the first partition should have a children substModel element
+        # the others should have a substModel attribute
+        if p == 'hand':
+            assert len(sm[0].xpath(".//substModel")) == 1
+
+            gs = sm[0].xpath(f".//parameter[@id='gammaShape.s:{p}']")[0]
+            assert gs.get('id') == f"gammaShape.s:{p}"
+            assert gs.get('spec') == "parameter.RealParameter"
+            assert gs.get('name') == "shape"
+        else:
+            assert sm[0].get('substModel') == '@covarion:combined'
 
 
 def test_convert_treelikelihood_ctmc(ctmc, partitions):
@@ -538,24 +554,10 @@ def test_convert_treelikelihood_ctmc(ctmc, partitions):
     
     # check substModel
     for p in partitions:
-        sm = ctmc.root.xpath(f".//distribution/siteModel[@id='SiteModel.s:{p}']")
-        assert len(sm), f'siteModel.s:{p} missing'
-        assert sm[0].get('substModel') == f'@CTMC.s:{p}'
-
-
-### --------------------------------------------------------------------------------------------------###
-### Misc
-### --------------------------------------------------------------------------------------------------###
-@pytest.mark.parametrize("fixture", ["covarion", "ctmc"])
-def test_clock(request, fixture):
-    m = request.getfixturevalue(fixture)
-    # we should have a clock before we change things
-    clock = m.root.xpath(".//branchRateModel")
-    assert len(clock) == 1, 'missing clock??'
-    
-    m.convert()
-    
-    clock = m.root.xpath(".//branchRateModel")
-    assert len(clock) == 1, 'missing clock'
-
-    
+        sm = ctmc.root.xpath(f".//distribution/siteModel[@id='SiteModel.s:{p}']/substModel")
+        assert len(sm), f'SiteModel.s:{p}/substModel.s:{p} missing'
+        assert sm[0].getparent().get('shape') == f"@gammaShape.s:{p}"
+        assert sm[0].get('id') == f'CTMC.s:{p}'
+        
+        
+        
