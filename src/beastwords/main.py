@@ -12,8 +12,9 @@ class Converter(object):
     userDataType_spec = '?'
     useAmbiguities = 'false'
     
-    
     def __init__(self, xmlfile, tree=None, root=None, model=None):
+        if not xmlfile.exists():
+            raise IOError(f"File {xmlfile} does not exist")
         self.xmlfile = xmlfile
         self.tree = tree if tree is not None else etree.parse(xmlfile)
         self.root = root if root is not None else self.tree.getroot()
@@ -75,7 +76,7 @@ class Converter(object):
         elif len(old) > 1:
             raise ValueError(f"Found many elements: {xpath}")
         
-        for p in self.partitions:
+        for p in sorted(self.partitions):
             attr = {k: v.format(p) for (k, v) in kwargs.items()}
             new = self.patch(old[0], newattrib=attr, update=False)
             parent = old[0].getparent()
@@ -169,9 +170,7 @@ class Converter(object):
                 id=f"UserDataType.{i}",
                 spec="beast.base.evolution.datatype.UserDataType",
                 characterName=f"{char}_{index}",
-                codeMap="",
-                states="-1",
-                value="")
+                codeMap="", states="-1", value="")
             udt.append(o)
             
             self.partitions[char].append(i)
@@ -179,19 +178,32 @@ class Converter(object):
                 self.ascertainment.append(i)
         
     def _convert_state(self):
-        self.replace(".//parameter[starts-with(@id, 'mutationRate.s:')]", id="mutationRate.s:{}")
+        path = ".//state[@id='state']/parameter[starts-with(@id, 'mutationRate.s:')]"
+        mr = self.root.xpath(path)
+        if len(mr) == 0: # Simon likes to delete these from one partiton runs. Make one up
+            #<parameter id="mutationRate.s:overall" spec="parameter.RealParameter" name="stateNode">1.0</parameter>
+            p = etree.Element("parameter",
+                id="mutationRate.s:dummy", spec="parameter.RealParameter", name="stateNode")
+            p.text = "1.0"
+            self.root.xpath(".//state[@id='state']")[0].append(p)
+        self.replace(path, id="mutationRate.s:{}")
 
     def _convert_prior(self):
-        # <prior id="MutationRatePrior.s:eye" name="distribution" x="@mutationRate.s:eye">
-        #     <OneOnX id="OneOnX.0" name="distr"/>
-        # </prior>
+        prior = self.root.xpath(".//distribution[@id='prior']")[0]
         path = ".//prior[starts-with(@id, 'MutationRatePrior.s:')]"
+        mrp = prior.xpath(path)
+        if len(mrp) == 0: # Simon likes to delete these from one partiton runs. Make one up
+            mrp = etree.Element("prior",
+                id="MutationRatePrior.s:dummy", name="distribution", x="@mutationRate.s:dummy")
+            etree.SubElement(mrp, "OneOnX", id="OneOnX.0", name="distr")
+            prior.append(mrp)
+        
         self.replace(path, id="MutationRatePrior.s:{}", x="@mutationRate.s:{}")
         # and update internal OneOnX
         for o in self.root.xpath(path):
             p = o.get('id').split(":")[1]
             o.getchildren()[0].set('id', f"OneOnX:{p}")
-
+            
     def _add_substmodel(self, partition, siteModel):
         return siteModel
 
@@ -296,9 +308,22 @@ class Converter(object):
         substModel.getparent().remove(substModel)
 
     def _convert_operators(self):
-        self.replace(
-            ".//operator[starts-with(@id, 'mutationRateScaler.s:')]", 
-            id="mutationRateScaler.s:{}", parameter="@mutationRate.s:{}")
+        path = ".//operator[starts-with(@id, 'mutationRateScaler.s:')]"
+        mrs = self.root.xpath(path)
+        if len(mrs) == 0: # Simon likes to delete these from one partiton runs. Make one up
+            # <operator id="mutationRateScaler.s:hand" spec="ScaleOperator" parameter="@mutationRate.s:hand" scaleFactor="0.5" weight="0.1"/>
+            mrs = etree.Element("operator",
+                id="mutationRateScaler.s:dummy", spec="ScaleOperator", parameter="@mutationRate.s:dummy",
+                scaleFactor="0.5", weight="0.1")
+
+            # find last operator
+            last = self.root.xpath(".//operator")[-1]
+            last.getparent().append(mrs)
+            parent = last.getparent()
+            index = parent.index(last)
+            parent.insert(index + 1, mrs)
+            
+        self.replace(path, id="mutationRateScaler.s:{}", parameter="@mutationRate.s:{}")
 
     def _convert_log(self):
         # <log idref="treeLikelihood.hand"/>
@@ -435,7 +460,11 @@ class CTMCConverter(Converter):
         super()._convert_state()
         # already have mutationRate.*
         # add gammaShape & freqParameter
-        self.replace(".//parameter[starts-with(@id, 'gammaShape.s:')]", id="gammaShape.s:{}")
+        try:
+            self.replace(".//parameter[starts-with(@id, 'gammaShape.s:')]", id="gammaShape.s:{}")
+        except ValueError:
+            pass
+            
         self.replace(".//parameter[starts-with(@id, 'freqParameter.s:')]", id="freqParameter.s:{}")
 
 
@@ -448,7 +477,11 @@ class CTMCConverter(Converter):
         #     </Exponential>
         # </prior>
         path = ".//prior[starts-with(@id, 'GammaShapePrior.s:')]"
-        self.replace(path, id="GammaShapePrior.s:{}", x="@gammaShape.s:{}")
+        
+        try:
+            self.replace(path, id="GammaShapePrior.s:{}", x="@gammaShape.s:{}")
+        except ValueError:
+            return  # no gamma - nothing to do
         
         # and update internal Exponential
         for o in self.root.xpath(path):
@@ -460,7 +493,6 @@ class CTMCConverter(Converter):
             old_id = exp.getchildren()[0].get('id').split(".")[0]
             exp.getchildren()[0].set('id', f"{old_id}:{p}")
 
-
     def _add_substmodel(self, partition, siteModel):
         # ctmc gets one substModel per word
         old = self.root.xpath(".//*/substModel")  # don't care which one it is 
@@ -470,31 +502,47 @@ class CTMCConverter(Converter):
         f = new.xpath('frequencies')[0]
         f.set('frequencies', f'@freqParameter.s:{partition}')
         siteModel.insert(0, new)
-        siteModel.set('shape', f"@gammaShape.s:{partition}")
+        
+        # handle gamma by removing it being estimated
+        if 'shape' in siteModel.attrib:
+            del(siteModel.attrib['shape'])
+        
+        gammaShape = etree.SubElement(siteModel, "parameter",
+            id=f"gammaShape.s:{partition}", spec="parameter.RealParameter", estimate="false", name="shape")
+        gammaShape.text = '1.0'
+        siteModel.append(gammaShape)
         return siteModel
-    
+        
     def _convert_operators(self):
         super()._convert_operators()
-
-        self.replace(".//operator[starts-with(@id, 'gammaShapeScaler.s:')]", id="gammaShapeScaler.s:{}")
-
+        
+        try:
+            self.replace(".//operator[starts-with(@id, 'gammaShapeScaler.s:')]", id="gammaShapeScaler.s:{}")
+        except:
+            pass  # no gamma
+            
         self.replace(".//operator[starts-with(@id, 'FrequenciesExchanger.s:')]", id="FrequenciesExchanger.s:{}")
 
         # patch internal freqParameters and gammaShapeScaler
         for p in self.partitions:
             op = self.root.xpath(f".//operator[@id='FrequenciesExchanger.s:{p}']")[0]
             self.patch(op.getchildren()[0], {'idref': f"freqParameter.s:{p}"}, update=True)
-
-            op = self.root.xpath(f".//operator[@id='gammaShapeScaler.s:{p}']")[0]
-            op.set("parameter", f"@gammaShape.s:{p}")
+            
+            try:
+                op = self.root.xpath(f".//operator[@id='gammaShapeScaler.s:{p}']")[0]
+                op.set("parameter", f"@gammaShape.s:{p}")
+            except:
+                pass  # no gamma
 
     def _convert_log(self):
         super()._convert_log()
         # <log idref="freqParameter.s:hand"/>
         self.replace(".//log[starts-with(@idref, 'freqParameter.s')]", idref="freqParameter.s:{}")
         # <log idref="gammaShape.s:overall"/>
-        self.replace(".//log[starts-with(@idref, 'gammaShape.s')]", idref="gammaShape.s:{}")
-
+        try:
+            self.replace(".//log[starts-with(@idref, 'gammaShape.s')]", idref="gammaShape.s:{}")
+        except ValueError:
+            pass  # no gamma
 
 def main():
     import argparse

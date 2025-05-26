@@ -1,15 +1,15 @@
-<?xml version="1.0" encoding="UTF-8" standalone="no"?><beast beautitemplate='BinaryCTMC' beautistatus='' namespace="beast.core:beast.evolution.alignment:beast.evolution.tree.coalescent:beast.core.util:beast.evolution.nuc:beast.evolution.operators:beast.evolution.sitemodel:beast.evolution.substitutionmodel:beast.base.evolution.alignment:beast.pkgmgmt:beast.base.core:beast.base.inference:beast.base.evolution.tree.coalescent:beast.pkgmgmt:beast.base.core:beast.base.inference.util:beast.evolution.nuc:beast.base.evolution.operator:beast.base.inference.operator:beast.base.evolution.sitemodel:beast.base.evolution.substitutionmodel:beast.base.evolution.likelihood" required="BEAST.base v2.7.7:BEASTLabs v2.0.2" version="2.7">
+<?xml version="1.0" encoding="UTF-8" standalone="no"?><beast beautitemplate='BinaryCovarion' beautistatus='' namespace="beast.core:beast.evolution.alignment:beast.evolution.tree.coalescent:beast.core.util:beast.evolution.nuc:beast.evolution.operators:beast.evolution.sitemodel:beast.evolution.substitutionmodel:beast.base.evolution.alignment:beast.pkgmgmt:beast.base.core:beast.base.inference:beast.base.evolution.tree.coalescent:beast.pkgmgmt:beast.base.core:beast.base.inference.util:beast.evolution.nuc:beast.base.evolution.operator:beast.base.inference.operator:beast.base.evolution.sitemodel:beast.base.evolution.substitutionmodel:beast.base.evolution.likelihood" required="BEAST.base v2.7.7:BEASTLabs v2.0.2" version="2.7">
 
-<!-- CTMC -->
+<!-- Covarion with No Mutation Rate -->
 
     <data
 id="overall"
 spec="Alignment"
 dataType="standard"
 name="alignment">
-        <sequence id="seq_Taxon11" spec="Sequence" taxon="Taxon1" totalcount="2" value="0111000?11"/>
-        <sequence id="seq_Taxon21" spec="Sequence" taxon="Taxon2" totalcount="2" value="0110100??1"/>
-        <sequence id="seq_Taxon31" spec="Sequence" taxon="Taxon3" totalcount="2" value="0110010???"/>
+        <sequence id="seq_Taxon1" spec="Sequence" taxon="Taxon1" totalcount="2" value="0111000?11"/>
+        <sequence id="seq_Taxon2" spec="Sequence" taxon="Taxon2" totalcount="2" value="0110100??1"/>
+        <sequence id="seq_Taxon3" spec="Sequence" taxon="Taxon3" totalcount="2" value="0110010???"/>
         <userDataType id="StandardData.0" spec="beast.base.evolution.datatype.StandardData" ambiguities="" nrOfStates="2">
             <charstatelabels id="UserDataType.0" spec="beast.base.evolution.datatype.UserDataType" characterName="_ascertainment_0" codeMap="" states="-1" value=""/>
             <charstatelabels id="UserDataType.1" spec="beast.base.evolution.datatype.UserDataType" characterName="hand_1" codeMap="" states="-1" value=""/>
@@ -51,43 +51,40 @@ name="alignment">
                     <alignment idref="overall"/>
                 </taxonset>
             </tree>
-            <parameter id="mutationRate.s:overall" spec="parameter.RealParameter" name="stateNode">1.0</parameter>
-            <parameter id="gammaShape.s:overall" spec="parameter.RealParameter" name="stateNode">1.0</parameter>
+            <parameter id="bcov_alpha.s:overall" spec="parameter.RealParameter" lower="1.0E-4" name="stateNode" upper="1.0">0.5</parameter>
+            <parameter id="bcov_s.s:overall" spec="parameter.RealParameter" lower="1.0E-4" name="stateNode" upper="Infinity">0.5</parameter>
+            <parameter id="frequencies.s:overall" spec="parameter.RealParameter" dimension="2" lower="0.0" name="stateNode" upper="1.0">0.5 0.5</parameter>
             <parameter id="birthRate.t:tree" spec="parameter.RealParameter" name="stateNode">1.0</parameter>
-            <parameter id="freqParameter.s:overall" spec="parameter.RealParameter" dimension="2" lower="0.0" name="stateNode" upper="1.0">0.5</parameter>
         </state>
         <init id="RandomTree.t:tree" spec="beastlabs.evolution.tree.SimpleRandomTree" estimate="false" initial="@Tree.t:tree" taxa="@overall"/>
         <distribution id="posterior" spec="CompoundDistribution">
             <distribution id="prior" spec="CompoundDistribution">
                 <distribution id="YuleModel.t:tree" spec="beast.base.evolution.speciation.YuleModel" birthDiffRate="@birthRate.t:tree" tree="@Tree.t:tree"/>
-                <prior id="MutationRatePrior.s:overall" name="distribution" x="@mutationRate.s:overall">
-                    <OneOnX id="OneOnX.0" name="distr"/>
+                <prior id="bcov_alpha_prior.s:overall" name="distribution" x="@bcov_alpha.s:overall">
+                    <Uniform id="Uniform.1" name="distr" upper="Infinity"/>
                 </prior>
-                <prior id="GammaShapePrior.s:overall" name="distribution" x="@gammaShape.s:overall">
-                    <Exponential id="Exponential.0" name="distr">
-                        <mean id="Function$Constant.0" spec="Function$Constant" value="1.0"/>
-                    </Exponential>
+                <prior id="bcov_s_prior.s:overall" name="distribution" x="@bcov_s.s:overall">
+                    <Gamma id="Gamma.0" name="distr">
+                        <alpha id="Function$Constant.0" spec="Function$Constant" value="0.05"/>
+                        <beta id="Function$Constant.1" spec="Function$Constant" value="10.0"/>
+                    </Gamma>
                 </prior>
                 <prior id="YuleBirthRatePrior.t:tree" name="distribution" x="@birthRate.t:tree">
-                    <Uniform id="Uniform.1" name="distr" upper="Infinity"/>
+                    <Uniform id="Uniform.2" name="distr" upper="Infinity"/>
                 </prior>
             </distribution>
             <distribution id="likelihood" spec="CompoundDistribution" useThreads="true">
-                <distribution id="treeLikelihood.overall" spec="TreeLikelihood" tree="@Tree.t:tree">
-                    <data
-id="bin.overall"
-spec="FilteredAlignment"
-ascertained="true"
-data="@overall"
-excludeto="1"
-filter="::">
-                        <userDataType id="Binary.0" spec="beast.base.evolution.datatype.Binary"/>
+                <distribution id="treeLikelihood.overall" spec="TreeLikelihood" tree="@Tree.t:tree" useAmbiguities="true">
+                    <data id="orgdata.overall" spec="FilteredAlignment" ascertained="true" data="@overall" excludeto="1" filter="-">
+                        <userDataType id="TwoStateCovarion.0" spec="beast.base.evolution.datatype.TwoStateCovarion"/>
                     </data>
-                    <siteModel id="SiteModel.s:overall" spec="SiteModel" gammaCategoryCount="4" mutationRate="@mutationRate.s:overall" shape="@gammaShape.s:overall">
+                    <siteModel id="SiteModel.s:overall" spec="SiteModel" gammaCategoryCount="1">
+                        <parameter id="gammaShape.s:overall" spec="parameter.RealParameter" estimate="false" name="shape">1.0</parameter>
+                        <parameter id="mutationRate.s:overall" spec="parameter.RealParameter" name="stateNode">1.0</parameter>
                         <parameter id="proportionInvariant.s:overall" spec="parameter.RealParameter" estimate="false" lower="0.0" name="proportionInvariant" upper="1.0">0.0</parameter>
-                        <substModel id="CTMC.s:overall" spec="GeneralSubstitutionModel">
-                            <parameter id="rates.s:overall" spec="parameter.RealParameter" dimension="2" estimate="false" lower="0.0" name="rates">1.0 1.0</parameter>
-                            <frequencies id="estimatedFreqs.s:overall" spec="Frequencies" frequencies="@freqParameter.s:overall"/>
+                        <substModel id="covarion" spec="BinaryCovarion" alpha="@bcov_alpha.s:overall" switchRate="@bcov_s.s:overall" vfrequencies="@frequencies.s:overall">
+                            <parameter id="hiddenfrequencies.s:overall" spec="parameter.RealParameter" dimension="2" estimate="false" lower="0.0" name="hfrequencies" upper="1.0">0.5 0.5</parameter>
+                            <frequencies id="dummyfrequencies.s:overall" spec="Frequencies" data="@overall" estimate="false"/>
                         </substModel>
                     </siteModel>
                     <branchRateModel id="StrictClock.c:clock" spec="beast.base.evolution.branchratemodel.StrictClockModel">
@@ -96,11 +93,13 @@ filter="::">
                 </distribution>
             </distribution>
         </distribution>
+
         <operator id="mutationRateScaler.s:overall" spec="ScaleOperator" parameter="@mutationRate.s:overall" scaleFactor="0.5" weight="0.1"/>
-        <operator id="gammaShapeScaler.s:overall" spec="ScaleOperator" parameter="@gammaShape.s:overall" scaleFactor="0.5" weight="0.1"/>
+        <operator id="bcovAlphaScaler.s:overall" spec="ScaleOperator" parameter="@bcov_alpha.s:overall" weight="0.1"/>
+        <operator id="bcovSwitchParamScaler.s:overall" spec="ScaleOperator" parameter="@bcov_s.s:overall" weight="0.1"/>
         <operator id="YuleBirthRateScaler.t:tree" spec="ScaleOperator" parameter="@birthRate.t:tree" weight="3.0"/>
-        <operator id="FrequenciesExchanger.s:overall" spec="operator.DeltaExchangeOperator" delta="0.01" weight="0.1">
-            <parameter idref="freqParameter.s:overall"/>
+        <operator id="frequenciesDelta.s:overall" spec="operator.DeltaExchangeOperator" delta="0.01" weight="0.1">
+            <parameter idref="frequencies.s:overall"/>
         </operator>
         <operator id="YuleModelTreeScaler.t:tree" spec="ScaleOperator" scaleFactor="0.5" tree="@Tree.t:tree" weight="3.0"/>
         <operator id="YuleModelTreeRootScaler.t:tree" spec="ScaleOperator" rootOnly="true" scaleFactor="0.5" tree="@Tree.t:tree" weight="3.0"/>
@@ -109,7 +108,7 @@ filter="::">
         <operator id="YuleModelNarrow.t:tree" spec="Exchange" tree="@Tree.t:tree" weight="15.0"/>
         <operator id="YuleModelWide.t:tree" spec="Exchange" isNarrow="false" tree="@Tree.t:tree" weight="3.0"/>
         <operator id="YuleModelWilsonBalding.t:tree" spec="WilsonBalding" tree="@Tree.t:tree" weight="3.0"/>
-        <operator id="allTipDatesRandomWalker.t:tree" spec="TipDatesRandomWalker" tree="@Tree.t:tree" weight="0.0" windowSize="1.0"/>
+
         <logger id="tracelog" spec="Logger" fileName="overall.log" logEvery="1000" model="@posterior" sort="smart">
             <log idref="posterior"/>
             <log idref="likelihood"/>
@@ -117,10 +116,11 @@ filter="::">
             <log idref="treeLikelihood.overall"/>
             <log id="TreeHeight.t:tree" spec="beast.base.evolution.tree.TreeStatLogger" tree="@Tree.t:tree"/>
             <log idref="mutationRate.s:overall"/>
-            <log idref="gammaShape.s:overall"/>
+            <log idref="bcov_alpha.s:overall"/>
+            <log idref="bcov_s.s:overall"/>
             <log idref="YuleModel.t:tree"/>
             <log idref="birthRate.t:tree"/>
-            <log idref="freqParameter.s:overall"/>
+            <log idref="frequencies.s:overall"/>
         </logger>
         <logger id="screenlog" spec="Logger" logEvery="1000">
             <log idref="posterior"/>
