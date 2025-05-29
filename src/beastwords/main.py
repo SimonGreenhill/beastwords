@@ -6,6 +6,8 @@ from lxml import etree
 
 from warnings import warn
 
+from beastwords.utils import repartition_by_size, repartition_by_group
+
         
 class Converter(object):
     
@@ -86,6 +88,15 @@ class Converter(object):
         
     def parse_word(self, w):
         return w.replace("_u_", "_").rsplit("_" ,1)
+    
+    def set_partitions(self, size):
+        try:
+            size = int(size)
+            self.partitions = repartition_by_size(size, self.partitions)
+        except ValueError:
+            self.partitions = repartition_by_group(size, self.partitions)
+        except:
+            raise
     
     def get_partitions(self):
         partitions = defaultdict(list)
@@ -549,9 +560,15 @@ def main():
     parser = argparse.ArgumentParser(description='Converts a one partition XML to a partitioned one')
     parser.add_argument("input", help='filename', type=Path)
     parser.add_argument("output", help='filename', type=Path)
+    parser.add_argument(
+        '-p', "--partitions", dest='partitions', default=None, type=int,
+        help="set partition number. If this is None use words", action='store'
+    )
     args = parser.parse_args()
     
     xml = Converter.from_file(args.input)
+    if args.partitions:
+        xml.set_partitions(args.partitions)
     xml.convert()
     xml.to_file(args.output)
 

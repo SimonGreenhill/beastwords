@@ -5,29 +5,9 @@ from lxml import etree
 
 from beastwords.main import Converter, CovarionConverter, CTMCConverter
 
-### --------------------------------------------------------------------------------------------------###
-### Fixtures
-### --------------------------------------------------------------------------------------------------###
-@pytest.fixture
-def partitions():
-    return ('hand', 'foot', 'eye')
-
-
-@pytest.fixture
-def covarion():
-    return Converter.from_file(Path(__file__).parent / 'overall-covarion.xml')
-
-
-@pytest.fixture
-def covarionNMR():
-    return Converter.from_file(Path(__file__).parent / 'overall-covarion-no_mutationrate.xml')
-
-
-@pytest.fixture
-def ctmc():
-    return Converter.from_file(Path(__file__).parent / 'overall-ctmc.xml')
-
-
+COVARION_MODELS = ["covarion", "covarionNMR", "covarionPartSize2", "covarionGroupSize2"]
+CTMC_MODELS = ['ctmc', 'ctmcPartSize3']
+ALL_MODELS = COVARION_MODELS + CTMC_MODELS
 
 ### --------------------------------------------------------------------------------------------------###
 ### Test Helpers
@@ -108,7 +88,7 @@ def test_replace(covarion):
         sorted([p.get('partition') for p in covarion.root.xpath(xpath)])
 
 
-@pytest.mark.parametrize("fixture", ["covarion", "ctmc", "covarionNMR"])
+@pytest.mark.parametrize("fixture", ALL_MODELS)
 def test_words(request, fixture):
     m = request.getfixturevalue(fixture)
     words = m.get_words()
@@ -135,7 +115,7 @@ def test_get_partition_range(covarion):
     assert covarion.get_partition_range('sorting') == '26-30'
 
 
-@pytest.mark.parametrize("fixture", ["covarion", "ctmc", "covarionNMR"])
+@pytest.mark.parametrize("fixture", ALL_MODELS)
 def test_parse_word(request, fixture):
     m = request.getfixturevalue(fixture)
     assert m.parse_word("_ascertainment_0") == ["_ascertainment", "0"]
@@ -145,7 +125,7 @@ def test_parse_word(request, fixture):
     assert m.parse_word("hand_u_136013") == ['hand', '136013']
 
 
-@pytest.mark.parametrize("fixture", ["covarion", "ctmc", "covarionNMR"])
+@pytest.mark.parametrize("fixture", ALL_MODELS)
 def test_partitions(request, fixture):
     partitions, ascertainment = request.getfixturevalue(fixture).get_partitions()
     assert partitions['hand'] == [1, 2]
@@ -153,6 +133,10 @@ def test_partitions(request, fixture):
     assert partitions['eye'] == [7, 8, 9]
     assert len(partitions) == 3
     assert ascertainment == [0]
+
+
+
+
 
 
 ### --------------------------------------------------------------------------------------------------###
@@ -218,8 +202,8 @@ def test_convert_sequences_xmluserdatatype(covarion, apartitions):
 ### --------------------------------------------------------------------------------------------------###
 ### State
 ### --------------------------------------------------------------------------------------------------###
-@pytest.mark.parametrize("fixture", ["covarion", "ctmc", "covarionNMR"])
-def test_convert_state(request, fixture, partitions):
+@pytest.mark.parametrize("fixture", ALL_MODELS)
+def test_convert_state(request, fixture):
     m = request.getfixturevalue(fixture)
     # check we have the original ones
     assert has_id(m.tree, 'parameter', 'mutationRate.s:overall')
@@ -229,76 +213,84 @@ def test_convert_state(request, fixture, partitions):
     state = m.tree.xpath(f".//state[@id='state']")[0]
     for child in state.getchildren():
         print(child.get('id'))
-    assert len(get_all(state, 'parameter', 'mutationRate.s')) == 3, "should have 3 mutationRates"
+    assert len(get_all(state, 'parameter', 'mutationRate.s')) == len(m.partitions), f"should have {len(m.partitions)} mutationRates"
     assert not has_id(state, 'parameter', 'mutationRate.s:overall'), "should have removed old one"
-    for p in partitions:
+    for p in m.partitions:
         assert has_id(state, 'parameter', f'mutationRate.s:{p}'), f"should have element for {p}"
 
     assert not has_id(state, 'parameter', 'mutationRate.s:_ascertainment'), "should not have _ascertainment partition"
 
     
-def test_convert_state_covarion(covarion):
-    covarion._convert_state()
-    assert has_id(covarion.tree, 'parameter', 'bcov_alpha.s:combined'), "should have element for combined"
-    assert has_id(covarion.tree, 'parameter', 'bcov_s.s:combined'), "should have element for combine"
-    assert has_id(covarion.tree, 'parameter', 'frequencies.s:combined'), "should have element for combined"
+@pytest.mark.parametrize("fixture", ["covarion", "covarionNMR", "covarionPartSize2"])
+def test_convert_state_covarion(request, fixture):
+    m = request.getfixturevalue(fixture)
+    m._convert_state()
+    assert has_id(m.tree, 'parameter', 'bcov_alpha.s:combined'), "should have element for combined"
+    assert has_id(m.tree, 'parameter', 'bcov_s.s:combined'), "should have element for combine"
+    assert has_id(m.tree, 'parameter', 'frequencies.s:combined'), "should have element for combined"
 
 
-def test_convert_state_ctmc(ctmc, partitions):
-    ctmc._convert_state()
+@pytest.mark.parametrize("fixture", ["ctmc", "ctmcPartSize3"])
+def test_convert_state_ctmc(request, fixture):
+    m = request.getfixturevalue(fixture)
+    m._convert_state()
     
-    for p in partitions:
+    for p in m.partitions:
         assert has_id(
-            ctmc.tree, 'parameter', f'gammaShape.s:{p}'), f"should have gammaShape element for {p}"
+            m.tree, 'parameter', f'gammaShape.s:{p}'), f"should have gammaShape element for {p}"
         assert has_id(
-            ctmc.tree, 'parameter', f'freqParameter.s:{p}'), f"should have freqParameter element for {p}"
+            m.tree, 'parameter', f'freqParameter.s:{p}'), f"should have freqParameter element for {p}"
     
-    assert not has_id(ctmc.tree, 'parameter', 'gammaShape.s:overall'), 'gammaShape.s:overall should be removed'
-    assert not has_id(ctmc.tree, 'parameter', 'freqParameter.s:overall'), 'freqParameter.s:overall should be removed'
+    assert not has_id(m.tree, 'parameter', 'gammaShape.s:overall'), 'gammaShape.s:overall should be removed'
+    assert not has_id(m.tree, 'parameter', 'freqParameter.s:overall'), 'freqParameter.s:overall should be removed'
 
 
 ### --------------------------------------------------------------------------------------------------###
 ### Prior
 ### --------------------------------------------------------------------------------------------------###
-@pytest.mark.parametrize("fixture", ["covarion", "ctmc", "covarionNMR"])
-def test_convert_prior(request, fixture, partitions):
+@pytest.mark.parametrize("fixture", ALL_MODELS)
+def test_convert_prior(request, fixture):
     m = request.getfixturevalue(fixture)
     m._convert_prior()
-    assert len(get_all(m.tree, 'prior', 'MutationRatePrior.s')) == 3, "should have 3"
+    assert len(get_all(m.tree, 'prior', 'MutationRatePrior.s')) == len(m.partitions), f"should have {len(m.partitions)}"
     assert not has_id(m.tree, 'prior', 'MutationRatePrior.s:overall'), "should have removed old one"
-    for p in partitions:
+    for p in m.partitions:
         assert has_id(m.tree, 'prior', f'MutationRatePrior.s:{p}'), f"should have element for {p}"
     assert not has_id(m.tree, 'parameter', 'MutationRatePrior.s:_ascertainment'), "should not have _ascertainment partition"
     
     # have we updated the children ids?
-    for p in partitions:
+    for p in m.partitions:
         # <OneOnX id="OneOnX.0:foot" name="distr"/>
         assert has_id(m.tree, 'OneOnX', f'OneOnX:{p}'), f'Missing renamed OneOnX:{p}'
 
 
-def test_convert_prior_covarion(covarion):
-    covarion._convert_prior()
-    ba = get_all(covarion.tree, 'prior', 'bcov_alpha_prior.s:combined')
+@pytest.mark.parametrize("fixture", COVARION_MODELS)
+def test_convert_prior_covarion(request, fixture):
+    m = request.getfixturevalue(fixture)
+    m._convert_prior()
+    ba = get_all(m.tree, 'prior', 'bcov_alpha_prior.s:combined')
     assert len(ba) == 1, 'bcov_alpha_prior.s: not renamed'
 
-    bs = get_all(covarion.tree, 'prior', 'bcov_s_prior.s:combined')
+    bs = get_all(m.tree, 'prior', 'bcov_s_prior.s:combined')
     assert len(bs) == 1, 'bcov_s_prior.s: not renamed'
 
     assert ba[0].get('x') == '@bcov_alpha.s:combined'
     assert bs[0].get('x') == '@bcov_s.s:combined'
 
 
-def test_convert_prior_ctmc(ctmc, partitions):
-    ctmc._convert_prior()
+@pytest.mark.parametrize("fixture", CTMC_MODELS)
+def test_convert_prior_ctmc(request, fixture):
+    m = request.getfixturevalue(fixture)
+    m._convert_prior()
     # <prior id="GammaShapePrior.s:foot" name="distribution" x="@gammaShape.s:foot">
     #     <Exponential id="Exponential.1" name="distr">
     #         <mean id="Function$Constant.1" spec="Function$Constant" value="1.0"/>
     #     </Exponential>
     # </prior>
-    for p in partitions:
-        assert has_id(ctmc.tree, 'prior', f"GammaShapePrior.s:{p}"), "should have element for eye"
-        assert has_id(ctmc.tree, 'Exponential', f"Exponential:{p}")
-        assert has_id(ctmc.tree, 'mean', f"Function$Constant:{p}")
+    for p in m.partitions:
+        assert has_id(m.tree, 'prior', f"GammaShapePrior.s:{p}"), "should have element for p1"
+        assert has_id(m.tree, 'Exponential', f"Exponential:{p}")
+        assert has_id(m.tree, 'mean', f"Function$Constant:{p}")
 
 
 
@@ -308,9 +300,9 @@ def test_convert_prior_ctmc(ctmc, partitions):
 ### --------------------------------------------------------------------------------------------------###
 
 @pytest.fixture
-def siteModels(partitions):
+def siteModels():
     out = []
-    for p in partitions:
+    for p in ['hand', 'foot', 'eye']:
         out.append(etree.Element("siteModel",
             id=f"SiteModel.s:{p}", 
             spec="SiteModel", 
@@ -319,8 +311,8 @@ def siteModels(partitions):
     return out
 
 
-def test_add_substmodel_covarion(covarion, siteModels, partitions):
-    for i, p in enumerate(partitions):
+def test_add_substmodel_covarion(covarion, siteModels):
+    for i, p in enumerate(['hand', 'foot', 'eye']):
         # first time should add a full substModel
         site = covarion._add_substmodel(p, siteModels[i])
         if p == 'hand':
@@ -338,8 +330,8 @@ def test_add_substmodel_covarion(covarion, siteModels, partitions):
             assert site.get('substModel') == '@covarion:combined'
 
 
-def test_add_substmodel_ctmc(ctmc, siteModels, partitions):
-    for i, p in enumerate(partitions):
+def test_add_substmodel_ctmc(ctmc, siteModels):
+    for i, p in enumerate(['hand', 'foot', 'eye']):
         # should add specific siteModel for each partition
         site = ctmc._add_substmodel(p, siteModels[i])
         sub = site.getchildren()[0]
@@ -361,24 +353,27 @@ def test_add_substmodel_ctmc(ctmc, siteModels, partitions):
 ### --------------------------------------------------------------------------------------------------###
 ### Operators
 ### --------------------------------------------------------------------------------------------------###
-@pytest.mark.parametrize("fixture", ["covarion", "ctmc", "covarionNMR"])
-def test_convert_operators(request, fixture, partitions):
+@pytest.mark.parametrize("fixture", ALL_MODELS)
+def test_convert_operators(request, fixture):
     m = request.getfixturevalue(fixture)
     m._convert_operators()
     # should have one for each partition
-    for p in partitions:
+    for p in m.partitions:
         op = m.tree.xpath(f".//operator[@id='mutationRateScaler.s:{p}']")[0]
         assert op.get('spec') == 'ScaleOperator'
         assert op.get('parameter') == f"@mutationRate.s:{p}"
         assert op.get('scaleFactor') is not None
         assert op.get('weight') is not None
 
-def test_convert_operators_covarion(covarion):
-    covarion._convert_operators()
 
-    opAlpha = covarion.tree.xpath(".//operator[@id='bcovAlphaScaler.s:combined']")
-    opSwitch = covarion.tree.xpath(".//operator[@id='bcovSwitchParamScaler.s:combined']")
-    opFD = covarion.tree.xpath(".//operator[@id='frequenciesDelta.s:combined']")
+@pytest.mark.parametrize("fixture", COVARION_MODELS)
+def test_convert_operators_covarion(request, fixture):
+    m = request.getfixturevalue(fixture)
+    m._convert_operators()
+
+    opAlpha = m.tree.xpath(".//operator[@id='bcovAlphaScaler.s:combined']")
+    opSwitch = m.tree.xpath(".//operator[@id='bcovSwitchParamScaler.s:combined']")
+    opFD = m.tree.xpath(".//operator[@id='frequenciesDelta.s:combined']")
     
     assert opAlpha, 'bcovAlphaScaler not renamed'
     assert opSwitch, 'bcovSwitchParamScaler not renamed'
@@ -390,58 +385,64 @@ def test_convert_operators_covarion(covarion):
     assert opFD[0].getchildren()[0].get('idref') == "frequencies.s:combined", 'frequenciesDelta not updated'
     
 
-def test_convert_operators_ctmc(ctmc, partitions):
-    ctmc._convert_operators()
-    for p in partitions:
-        op = ctmc.tree.xpath(f".//operator[@id='FrequenciesExchanger.s:{p}']")
+@pytest.mark.parametrize("fixture", CTMC_MODELS)
+def test_convert_operators_ctmc(request, fixture):
+    m = request.getfixturevalue(fixture)
+    m._convert_operators()
+    for p in m.partitions:
+        op = m.tree.xpath(f".//operator[@id='FrequenciesExchanger.s:{p}']")
         assert op, f'FrequenciesExchanger.s:{p} not renamed'
         assert op[0].getchildren()[0].get('idref') == f"freqParameter.s:{p}", "%s != %s" % (
             op[0].getchildren()[0].get('idref'), f"freqParameter.s:{p}")
 
-        gss = ctmc.tree.xpath(f".//operator[@id='gammaShapeScaler.s:{p}']")
+        gss = m.tree.xpath(f".//operator[@id='gammaShapeScaler.s:{p}']")
         assert gss, 'Missing an expected gammaShapeScaler'
 
 
 
 def test_convert_operators_covarionNMR(covarionNMR):
     covarionNMR._convert_operators()
-    # we didn't place this correctly
+    # check we fixed the bug where this wasn't placed correctly.
     for o in covarionNMR.tree.xpath(".//operator"):
         assert o.getparent().get('id') == 'mcmc'
 
 ### --------------------------------------------------------------------------------------------------###
 ### Log
 ### --------------------------------------------------------------------------------------------------###
-@pytest.mark.parametrize("fixture", ["covarion", "ctmc", "covarionNMR"])
-def test_convert_log(request, fixture, partitions):
+@pytest.mark.parametrize("fixture", ALL_MODELS)
+def test_convert_log(request, fixture):
     m = request.getfixturevalue(fixture)
     m._convert_log()
-    for p in partitions:
+    for p in m.partitions:
         assert m.tree.xpath(f".//log[@idref='treeLikelihood.{p}']")
         assert m.tree.xpath(f".//log[@idref='mutationRate.s:{p}']")
 
 
-def test_convert_log_covarion(covarion, partitions):
-    covarion._convert_log()
+@pytest.mark.parametrize("fixture", COVARION_MODELS)
+def test_convert_log_covarion(request, fixture):
+    m = request.getfixturevalue(fixture)
+    m._convert_log()
     # just some renames
-    assert covarion.tree.xpath(".//log[@idref='bcov_alpha.s:combined']")
-    assert covarion.tree.xpath(".//log[@idref='bcov_s.s:combined']")
-    assert covarion.tree.xpath(".//log[@idref='frequencies.s:combined']")
+    assert m.tree.xpath(".//log[@idref='bcov_alpha.s:combined']")
+    assert m.tree.xpath(".//log[@idref='bcov_s.s:combined']")
+    assert m.tree.xpath(".//log[@idref='frequencies.s:combined']")
     
 
-def test_convert_log_ctmc(ctmc, partitions):
-    ctmc._convert_log()
-    for p in partitions:
-        assert ctmc.tree.xpath(f".//log[@idref='freqParameter.s:{p}']")
-        assert ctmc.tree.xpath(f".//log[@idref='gammaShape.s:{p}']")
+@pytest.mark.parametrize("fixture", CTMC_MODELS)
+def test_convert_log_ctmc(request, fixture):
+    m = request.getfixturevalue(fixture)
+    m._convert_log()
+    for p in m.partitions:
+        assert m.tree.xpath(f".//log[@idref='freqParameter.s:{p}']")
+        assert m.tree.xpath(f".//log[@idref='gammaShape.s:{p}']")
     
     
 
 ### --------------------------------------------------------------------------------------------------###
 ### Tree Likelihood
 ### --------------------------------------------------------------------------------------------------###
-@pytest.mark.parametrize("fixture", ["covarion", "ctmc", "covarionNMR"])
-def test_convert_treelikelihood(request, fixture, partitions):
+@pytest.mark.parametrize("fixture", COVARION_MODELS)
+def test_convert_treelikelihood(request, fixture):
     m = request.getfixturevalue(fixture)
     m._convert_treelikelihood()
     # <distribution id="treeLikelihood.foot" spec="TreeLikelihood" branchRateModel="@StrictClock.c:clock" tree="@Tree.t:tree" useAmbiguities="true">
@@ -462,9 +463,9 @@ def test_convert_treelikelihood(request, fixture, partitions):
     # </distribution>
     
     # check we don't have extra (i.e. the old one)
-    assert len(m.tree.xpath(f".//distribution[starts-with(@id, 'treeLikelihood.')]")) == len(partitions)
+    assert len(m.tree.xpath(f".//distribution[starts-with(@id, 'treeLikelihood.')]")) == len(m.partitions)
     
-    for i, p in enumerate(partitions):
+    for i, p in enumerate(m.partitions):
         el = m.tree.xpath(f".//distribution[@id='treeLikelihood.{p}']")
         # check we have all the required attribs on <distribution
         assert el, f'missing treeLikelihood for {p}'
@@ -511,28 +512,35 @@ def test_convert_treelikelihood(request, fixture, partitions):
         assert pi.get('name') == "proportionInvariant"
     
 
-def test_convert_treelikelihood_covarion(covarion, partitions):
-    covarion._convert_treelikelihood()
+@pytest.mark.parametrize("fixture", COVARION_MODELS)
+def test_convert_treelikelihood_covarion(request, fixture):
+    m = request.getfixturevalue(fixture)
+    m._convert_sequences()
+    m._convert_treelikelihood()
+
     # check all userDataTypes
     #<userDataType id="TwoStateCovarion.1" spec="beast.base.evolution.datatype.TwoStateCovarion"/>
-    udt = covarion.root.xpath(".//distribution[@spec='TreeLikelihood']//userDataType")
-    assert len(udt) == len(partitions)
+    udt = m.root.xpath(".//distribution[@spec='TreeLikelihood']//userDataType")
+    assert len(udt) == len(m.partitions)
+    
+    print(m.partitions)
     
     for i, u in enumerate(udt):
-        assert u.get('id') == f'userDataType:{partitions[i]}'
+        p = list(m.partitions.keys())[i]
+        assert u.get('id') == f'userDataType:{p}'
         assert u.get('spec') == 'beast.base.evolution.datatype.TwoStateCovarion'
 
     # check that we have useAmbiguities=True
-    for p in partitions:
-        d = covarion.root.xpath(f".//distribution[@id='treeLikelihood.{p}']")
+    for p in m.partitions:
+        d = m.root.xpath(f".//distribution[@id='treeLikelihood.{p}']")
         assert d[0].get('useAmbiguities') == 'true'
 
-    for p in partitions:
-        sm = covarion.root.xpath(f".//distribution/siteModel[@id='SiteModel.s:{p}']")
+    for i, p in enumerate(m.partitions):
+        sm = m.root.xpath(f".//distribution/siteModel[@id='SiteModel.s:{p}']")
         assert len(sm), f'siteModel.s:{p} missing'
         # only the first partition should have a children substModel element
         # the others should have a substModel attribute
-        if p == 'hand':
+        if i == 0:
             assert len(sm[0].xpath(".//substModel")) == 1
 
             gs = sm[0].xpath(f".//parameter[@id='gammaShape.s:{p}']")[0]
@@ -543,23 +551,27 @@ def test_convert_treelikelihood_covarion(covarion, partitions):
             assert sm[0].get('substModel') == '@covarion:combined'
 
 
-def test_convert_treelikelihood_ctmc(ctmc, partitions):
-    ctmc._convert_treelikelihood()
+@pytest.mark.parametrize("fixture", CTMC_MODELS)
+def test_convert_treelikelihood_ctmc(request, fixture):
+    m = request.getfixturevalue(fixture)
+    m._convert_treelikelihood()
+    
     # check that we have useAmbiguities=False
-    for p in partitions:
-        d = ctmc.root.xpath(f".//distribution[@id='treeLikelihood.{p}']")
+    for p in m.partitions:
+        d = m.root.xpath(f".//distribution[@id='treeLikelihood.{p}']")
         assert d[0].get('useAmbiguities', 'false') == 'false'
     
     # check userDataType
-    udt = ctmc.root.xpath(".//distribution[@spec='TreeLikelihood']//userDataType")
-    assert len(udt) == len(partitions)
+    udt = m.root.xpath(".//distribution[@spec='TreeLikelihood']//userDataType")
+    assert len(udt) == len(m.partitions)
     for i, u in enumerate(udt):
-        assert u.get('id') == f'userDataType:{partitions[i]}'
+        p = list(m.partitions.keys())[i]
+        assert u.get('id') == f'userDataType:{p}'
         assert u.get('spec') == 'beast.base.evolution.datatype.Binary'
     
     # check substModel
-    for p in partitions:
-        sm = ctmc.root.xpath(f".//distribution/siteModel[@id='SiteModel.s:{p}']/substModel")
+    for p in m.partitions:
+        sm = m.root.xpath(f".//distribution/siteModel[@id='SiteModel.s:{p}']/substModel")
         assert len(sm), f'SiteModel.s:{p}/substModel.s:{p} missing'
         
         # check parent siteModel 
