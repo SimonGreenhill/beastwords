@@ -52,19 +52,31 @@ def _split(rangestr):
     return chunks
 
 
-def repartition_by_group(partitions, data):
+def repartition_by_groupsize(partitions, data):
     """
     Repartitions `data` by splitting into groups
     
     > repartition_by_group("1-5,6-10", {...})
     """
+    # 1. collect data by size:
+    sizes = [(len(sites), k) for (k, sites) in data.items()]
+    #[(1, 'book'), (1, 'elbow'), (2, 'hand'), (3, 'eye'), (4, 'foot'), (5, 'arm')]
+    
     out, seen = {}, []
-    for i, sites in enumerate(_split(partitions), 1):
-        out[f'p{i}'] = sites
-        for s in sites:
-            if s in seen:
-                raise ValueError(r"Duplicate site {site} in partition {i}")
-            seen.append(s)
+    for window in _split(partitions):
+        window = sorted(window)
+        label = f'p{window[0]}' if len(window) == 1 else f'p{window[0]}-{window[-1]}'
+        out[label] = []
+        for size in window:
+            for partition in [p for (n,p) in sizes if n == size]:
+                out[label].extend(data[partition])
+                if dupe := len([site for site in data[partition] if site in seen]):
+                    raise ValueError(f"Sites in multiple partitions: {dupe}")
+                seen.extend(data[partition])
+    
+    missing = [s for s in range(1, max(seen)) if s not in seen]
+    if len(missing):
+        warn(f"Some sites are ignored: {missing}")
     
     return out
         

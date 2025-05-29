@@ -1,6 +1,6 @@
 import pytest
 
-from beastwords.utils import repartition_by_size, repartition_by_group, _split
+from beastwords.utils import repartition_by_size, repartition_by_groupsize, _split
 
 @pytest.fixture
 def data():
@@ -52,16 +52,28 @@ def test__split():
     ]
 
 
-def test_repartition_by_group(data):
-    assert repartition_by_group("16,15,1-2", data) == {'p1': [16], 'p2': [15], 'p3': [1, 2]}
-    assert repartition_by_group("1-3,6-9", data) == {'p1': [1, 2, 3], 'p2': [6, 7, 8, 9]}
-    assert repartition_by_group("15-16,1-2,7-9,3-6,10-14", data) == {
-        'p1': [15, 16],
-        'p2': [1, 2], 
-        'p3': [7, 8, 9],
-        'p4': [3, 4, 5, 6],
-        'p5': [10, 11, 12, 13, 14]}
-
+def test_repartition_by_groupsize(data):
+    
+    with pytest.warns(UserWarning):
+        assert repartition_by_groupsize("1,2", data) == {
+            'p1': data['book'] + data['elbow'],
+            'p2': data['hand']
+        }
+    
+    # no warning
+    assert repartition_by_groupsize("1-3,4-9", data) == {
+        'p1-3': data['book'] + data['elbow'] + data['hand'] + data['eye'],
+        'p4-9': data['foot'] + data['arm']
+    }
+    
+    # no warning
+    assert repartition_by_groupsize("1,2,3,4-10", data) == {
+        'p1': data['book'] + data['elbow'],
+        'p2': data['hand'],
+        'p3': data['eye'],
+        'p4-10': data['foot'] + data['arm']
+    }
+    
     # check errors on overlap
     with pytest.raises(ValueError):
-        repartition_by_group("1-6,6-9", data)
+        repartition_by_groupsize("1-2,2-9", data)

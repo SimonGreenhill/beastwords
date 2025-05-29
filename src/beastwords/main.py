@@ -6,9 +6,9 @@ from lxml import etree
 
 from warnings import warn
 
-from beastwords.utils import repartition_by_size, repartition_by_group
+from beastwords.utils import repartition_by_size, repartition_by_groupsize
 
-        
+
 class Converter(object):
     
     userDataType_spec = '?'
@@ -94,7 +94,7 @@ class Converter(object):
             size = int(size)
             self.partitions = repartition_by_size(size, self.partitions)
         except ValueError:
-            self.partitions = repartition_by_group(size, self.partitions)
+            self.partitions = repartition_by_groupsize(size, self.partitions)
         except:
             raise
     
@@ -561,7 +561,7 @@ def main():
     parser.add_argument("input", help='filename', type=Path)
     parser.add_argument("output", help='filename', type=Path)
     parser.add_argument(
-        '-p', "--partitions", dest='partitions', default=None, type=int,
+        '-p', "--partitions", dest='partitions', default=None, type=str,
         help="set partition number. If this is None use words", action='store'
     )
     args = parser.parse_args()
