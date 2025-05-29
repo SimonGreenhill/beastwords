@@ -7,20 +7,25 @@ Convert single partition beast2 linguistic XML files into word-partitioned analy
 
 Clone repository and run pip:
 
-> git clone https://github.com/SimonGreenhill/beastwords
-> cd beastwords && python -m pip install -e .
+```shell
+git clone https://github.com/SimonGreenhill/beastwords
+cd beastwords && python -m pip install -e .
+```
 
 ## Usage:
 
 
 ### Split on words
 
-> beastwords covarion.xml covarion.words.xml
+```shell
+beastwords covarion.xml covarion.words.xml
+```
 
 ### Divide into (n) partitions:
 
-> beastwords -p 5 covarion.xml covarion.5parts.xml
-
+```shell
+beastwords -p 5 covarion.xml covarion.5parts.xml
+```
 
 ### Divide into specified groups:
 
@@ -29,17 +34,18 @@ This will divide the dataset into two partitions:
  p1 = 1-10
  p2 = 11-20
 
-> beastwords -p 1-10,11-20 covarion.xml covarion.groups.xml
-
+```shell
+beastwords -p 1-10,11-20 covarion.xml covarion.groups.xml
+```
 
 
 ## beastsitedistr can help you choose sizes:
 
 Print a histogram of current partition sizes. In the below figure, there are 11 words with 11 sites (=cognate sets). 
 
-> beastsitedistr myfile.xml 
+```shell
+beastsitedistr myfile.xml 
 
-```
 2	11	███████████
 3	11	███████████
 4	23	███████████████████████
