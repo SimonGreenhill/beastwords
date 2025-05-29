@@ -5,6 +5,10 @@ Convert single partition beast2 linguistic XML files into word-partitioned analy
 
 ## Installation
 
+Clone repository and run pip:
+
+> git clone https://github.com/SimonGreenhill/beastwords
+> cd beastwords && python -m pip install -e .
 
 ## Usage:
 
