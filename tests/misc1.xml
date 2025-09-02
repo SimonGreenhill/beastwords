@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<beast beautitemplate='BinaryCovarion' beautistatus='' namespace="beast.core:beast.evolution.alignment:beast.evolution.tree.coalescent:beast.core.util:beast.evolution.nuc:beast.evolution.operators:beast.evolution.sitemodel:beast.evolution.substitutionmodel:beast.base.evolution.alignment:beast.pkgmgmt:beast.base.core:beast.base.inference:beast.base.evolution.tree.coalescent:beast.pkgmgmt:beast.base.core:beast.base.inference.util:beast.evolution.nuc:beast.base.evolution.operator:beast.base.inference.operator:beast.base.evolution.sitemodel:beast.base.evolution.substitutionmodel:beast.base.evolution.likelihood" required="BEAST.base v2.7.4:BEASTLabs v2.0.0:BDSKY v1.5.0:ORC v1.1.1" version="2.7">
+    <data id="pano-full" spec="Alignment" dataType="standard" name="alignment">
+        <sequence id="test1" spec="Sequence" taxon="test" totalcount="2" value="01"/>
+        <sequence id="test2" spec="Sequence" taxon="test" totalcount="2" value="01"/>
+        <userDataType id="StandardData.0" spec="beast.base.evolution.datatype.StandardData" ambiguities="" nrOfStates="2">
+            <charstatelabels id="UserDataType.0" spec="beast.base.evolution.datatype.UserDataType" characterName="_ascertainment" codeMap="" states="-1" value=""/>
+            <charstatelabels id="UserDataType.1" spec="beast.base.evolution.datatype.UserDataType" characterName="I" codeMap="" states="-1" value=""/>
+        </userDataType>
+    </data>
+</beast>

@@ -87,6 +87,11 @@ class Converter(object):
         old[0].getparent().remove(old[0])  # remove old one
         
     def parse_word(self, w):
+        if 'ascertainment' in w:
+            _id = "_".join(w.split("ascertainment_")[1:])
+            if not _id or not len(_id):
+                _id = '0'
+            return ['_ascertainment', _id]
         return w.replace("_u_", "_").rsplit("_" ,1)
     
     def set_partitions(self, size):

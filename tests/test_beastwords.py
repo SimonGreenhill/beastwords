@@ -118,11 +118,21 @@ def test_get_partition_range(covarion):
 @pytest.mark.parametrize("fixture", ALL_MODELS)
 def test_parse_word(request, fixture):
     m = request.getfixturevalue(fixture)
-    assert m.parse_word("_ascertainment_0") == ["_ascertainment", "0"]
     assert m.parse_word("hand_1") == ['hand', '1']
     assert m.parse_word("hand_889") == ['hand', '889']
     assert m.parse_word("leg_foot_42") == ['leg_foot', '42']
     assert m.parse_word("hand_u_136013") == ['hand', '136013']
+
+
+@pytest.mark.parametrize("fixture", ALL_MODELS)
+def test_parse_word_ascertainmentchar(request, fixture):
+    """special casing for ascertainment characters"""
+    m = request.getfixturevalue(fixture)
+    assert m.parse_word("_ascertainment_0") == ["_ascertainment", "0"]
+    assert m.parse_word("_ascertainment") == ["_ascertainment", "0"]
+    assert m.parse_word("_ascertainment_57") == ["_ascertainment", "57"]
+    assert m.parse_word("_ascertainment_hand_2") == ["_ascertainment", "hand_2"]
+
 
 
 @pytest.mark.parametrize("fixture", ALL_MODELS)
