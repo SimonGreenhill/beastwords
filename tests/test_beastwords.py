@@ -262,16 +262,23 @@ def test_convert_state_ctmc(request, fixture):
 def test_convert_prior(request, fixture):
     m = request.getfixturevalue(fixture)
     m._convert_prior()
-    assert len(get_all(m.tree, 'prior', 'MutationRatePrior.s')) == len(m.partitions), f"should have {len(m.partitions)}"
+    # King 2026: the old improper per-partition OneOnX MutationRatePriors are
+    # replaced by one explicit meaning-count-weighted Dirichlet over all rates.
+    assert len(get_all(m.tree, 'prior', 'MutationRatePrior.s')) == 0, "per-partition rate priors should be removed"
     assert not has_id(m.tree, 'prior', 'MutationRatePrior.s:overall'), "should have removed old one"
     for p in m.partitions:
-        assert has_id(m.tree, 'prior', f'MutationRatePrior.s:{p}'), f"should have element for {p}"
-    assert not has_id(m.tree, 'parameter', 'MutationRatePrior.s:_ascertainment'), "should not have _ascertainment partition"
-    
-    # have we updated the children ids?
-    for p in m.partitions:
-        # <OneOnX id="OneOnX.0:foot" name="distr"/>
-        assert has_id(m.tree, 'OneOnX', f'OneOnX:{p}'), f'Missing renamed OneOnX:{p}'
+        assert not has_id(m.tree, 'prior', f'MutationRatePrior.s:{p}'), f"{p} should have no rate prior"
+
+    if len(m.partitions) > 1:
+        dist = m.tree.xpath(".//distribution[@id='mutationRates.prior']")
+        assert dist, "missing WeightedDirichlet mutationRates.prior"
+        # rates concatenated into one vector, in partition order
+        args = [a.get('idref') for a in dist[0].xpath("./x/arg")]
+        assert args == [f"mutationRate.s:{p}" for p in m.partitions]
+        distr = dist[0].xpath("./distr")[0]
+        assert 'WeightedDirichlet' in distr.get('spec')
+        # prior shares the operator's weightparameter
+        assert distr.xpath("./weights")[0].get('idref') == 'weightparameter'
 
 
 @pytest.mark.parametrize("fixture", COVARION_MODELS)
@@ -367,13 +374,28 @@ def test_add_substmodel_ctmc(ctmc, siteModels):
 def test_convert_operators(request, fixture):
     m = request.getfixturevalue(fixture)
     m._convert_operators()
-    # should have one for each partition
+    # King 2026 fixed-mean scheme: the independent per-partition mutationRateScaler
+    # operators are replaced by a single meaning-count-weighted DeltaExchange.
     for p in m.partitions:
-        op = m.tree.xpath(f".//operator[@id='mutationRateScaler.s:{p}']")[0]
-        assert op.get('spec') == 'ScaleOperator'
-        assert op.get('parameter') == f"@mutationRate.s:{p}"
-        assert op.get('scaleFactor') is not None
-        assert op.get('weight') is not None
+        assert not m.tree.xpath(f".//operator[@id='mutationRateScaler.s:{p}']"), \
+            f"mutationRateScaler.s:{p} should be removed"
+
+    op = m.tree.xpath(".//operator[@id='FixMeanMutationRatesOperator']")
+    assert op, "missing fixed-mean DeltaExchange operator"
+    op = op[0]
+    assert 'DeltaExchangeOperator' in op.get('spec')
+    # one <parameter idref> per partition
+    refs = [c.get('idref') for c in op.xpath('./parameter')]
+    assert refs == [f"mutationRate.s:{p}" for p in m.partitions]
+    # weightvector = meaning count per partition, in the same order; the
+    # WeightedDirichlet prior shares it by id ("weightparameter").
+    wv = op.xpath('./weightvector')[0]
+    assert wv.get('id') == 'weightparameter'
+    assert wv.get('dimension') == str(len(m.partitions))
+    weights = [int(x) for x in wv.text.split()]
+    expected = [m.get_partition_weights()[p] for p in m.partitions]
+    assert weights == expected
+    assert sum(weights) >= len(m.partitions)  # each partition >= 1 meaning
 
 
 @pytest.mark.parametrize("fixture", COVARION_MODELS)
@@ -512,7 +534,7 @@ def test_convert_treelikelihood(request, fixture):
         assert siteModel, f'missing siteModel for {p}'
         assert siteModel[0].get('id') == f'SiteModel.s:{p}'
         assert siteModel[0].get('spec') == 'SiteModel'
-        assert siteModel[0].get('gammaCategoryCount') == '1'
+        assert siteModel[0].get('gammaCategoryCount') == str(m.get_gamma())
         assert siteModel[0].get('mutationRate') == f'@mutationRate.s:{p}'
         
         # check siteModel parameter proportionInvariant
@@ -583,16 +605,21 @@ def test_convert_treelikelihood_ctmc(request, fixture):
     for p in m.partitions:
         sm = m.root.xpath(f".//distribution/siteModel[@id='SiteModel.s:{p}']/substModel")
         assert len(sm), f'SiteModel.s:{p}/substModel.s:{p} missing'
-        
-        # check parent siteModel 
-        assert sm[0].getparent().get('shape') == None
+        siteModel = sm[0].getparent()
         assert sm[0].get('id') == f'CTMC.s:{p}'
 
-        gs = sm[0].getparent().xpath(f".//parameter[@id='gammaShape.s:{p}']")
-        assert len(gs), "No gammaShape parameter in this siteModel {p}"
-        assert gs[0].get('id') == f"gammaShape.s:{p}"
-        assert gs[0].get('spec') == "parameter.RealParameter"
-        assert gs[0].get('name') == "shape"
+        # gamma must be preserved from the source (gammaCategoryCount) and, when
+        # active, reference the estimated per-partition gammaShape rather than an
+        # inert inline duplicate.
+        assert siteModel.get('gammaCategoryCount') == str(m.get_gamma())
+        if m.get_gamma() > 1:
+            assert siteModel.get('shape') == f"@gammaShape.s:{p}"
+            assert not siteModel.xpath(f"./parameter[@id='gammaShape.s:{p}']"), \
+                "estimated gammaShape should be referenced, not inlined"
+        else:
+            gs = siteModel.xpath(f"./parameter[@id='gammaShape.s:{p}']")
+            assert len(gs), f"No fixed gammaShape parameter in siteModel {p}"
+            assert gs[0].get('name') == "shape"
         
     
         

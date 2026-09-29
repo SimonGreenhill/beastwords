@@ -24,7 +24,9 @@ class Converter(object):
 
         self.words = self.get_words()
         self.partitions, self.ascertainment = self.get_partitions()
-    
+        # read from the source siteModel now, before it gets rewritten
+        self._gamma_count = self._read_gamma_count()
+
     @classmethod
     def from_file(cls, xmlfile):
         tree = etree.parse(xmlfile)
@@ -95,6 +97,10 @@ class Converter(object):
         return w.replace("_u_", "_").rsplit("_" ,1)
     
     def set_partitions(self, size):
+        # self.partitions is currently {meaning: [sites]}; remember it so we can
+        # weight each resulting bin by the number of meanings it contains
+        # (King 2026 meaning-count weighting), not the number of cognates.
+        meaning_sites = {m: list(s) for m, s in self.partitions.items()}
         try:
             size = int(size)
             self.partitions = repartition_by_size(size, self.partitions)
@@ -102,7 +108,25 @@ class Converter(object):
             self.partitions = repartition_by_groupsize(size, self.partitions)
         except:
             raise
-    
+        site_to_meaning = {s: m for m, ss in meaning_sites.items() for s in ss}
+        self._partition_weights = {
+            p: len({site_to_meaning[s] for s in sites})
+            for p, sites in self.partitions.items()
+        }
+
+    def get_partition_weights(self):
+        """Meaning-count weight for each partition, in ``self.partitions`` order.
+
+        Used as the ``weightvector`` of the fixed-mean relative-rate
+        DeltaExchange operator (King 2026): weight each partition by its number
+        of meanings, not its number of cognates. With one meaning per partition
+        (plain word-partitioning) every weight is 1.
+        """
+        weights = getattr(self, "_partition_weights", None)
+        if weights is None:
+            return {p: 1 for p in self.partitions}
+        return {p: weights[p] for p in self.partitions}
+
     def get_partitions(self):
         partitions = defaultdict(list)
         for i, (char, _id) in enumerate(self.words, 0):
@@ -110,8 +134,17 @@ class Converter(object):
         ascertainment = partitions.pop("_ascertainment", [])
         return (partitions, ascertainment)
 
+    def _read_gamma_count(self):
+        """gammaCategoryCount of the (single) source siteModel, else 1."""
+        sm = self.root.xpath(".//siteModel[@gammaCategoryCount]")
+        return int(sm[0].get("gammaCategoryCount")) if sm else 1
+
     def get_gamma(self):
-        return 1  # assuming we don't want a gamma per partition here.
+        # Preserve the source analysis's gammaCategoryCount. This was previously
+        # hard-coded to 1, which silently disabled gamma rate variation in every
+        # partitioned output even when the source used gamma (e.g. 4 categories)
+        # and estimated a per-partition gammaShape -- producing an inert model.
+        return getattr(self, "_gamma_count", 1)
 
     def get_partition_range(self, partition):
         """Returns a string showing the range of sites in this partition"""
@@ -206,20 +239,45 @@ class Converter(object):
 
     def _convert_prior(self):
         prior = self.root.xpath(".//distribution[@id='prior']")[0]
-        path = ".//prior[starts-with(@id, 'MutationRatePrior.s:')]"
-        mrp = prior.xpath(path)
-        if len(mrp) == 0: # Simon likes to delete these from one partiton runs. Make one up
-            mrp = etree.Element("prior",
-                id="MutationRatePrior.s:dummy", name="distribution", x="@mutationRate.s:dummy")
-            etree.SubElement(mrp, "OneOnX", id="OneOnX.0", name="distr")
-            prior.append(mrp)
-        
-        self.replace(path, id="MutationRatePrior.s:{}", x="@mutationRate.s:{}")
-        # and update internal OneOnX
-        for o in self.root.xpath(path):
-            p = o.get('id').split(":")[1]
-            o.getchildren()[0].set('id', f"OneOnX:{p}")
-            
+        # King 2026: replace the per-partition mutation-rate priors (previously
+        # replicated per partition with an improper OneOnX distribution) with a
+        # single explicit, meaning-count-weighted Dirichlet prior over all the
+        # partition rates (see _add_fixmeanrate_prior). This both removes the
+        # improper prior and applies King's meaning-count weighting.
+        for o in prior.xpath(".//prior[starts-with(@id, 'MutationRatePrior.s:')]"):
+            o.getparent().remove(o)
+        self._add_fixmeanrate_prior()
+
+    def _add_fixmeanrate_prior(self):
+        """Explicit meaning-count-weighted Dirichlet prior on the partition rates.
+
+        Concatenates the per-partition mutationRate scalars into one vector
+        (feast.Concatenate) and places a beastlabs WeightedDirichlet on it. The
+        meaning-count weights live in a single ``mutationRateWeights`` parameter
+        that is shared with the fixed-mean DeltaExchange operator, so the prior
+        and the operator use identical weighting (King 2026).
+        """
+        parts = list(self.partitions)
+        if len(parts) < 2:
+            return
+        prior = self.root.xpath(".//distribution[@id='prior']")[0]
+        dist = etree.SubElement(prior, "distribution",
+            id="mutationRates.prior", spec="distribution.Prior")
+        x = etree.SubElement(dist, "x",
+            id="mutationRates", spec="feast.function.Concatenate")
+        for p in parts:
+            etree.SubElement(x, "arg", idref=f"mutationRate.s:{p}")
+        distr = etree.SubElement(dist, "distr",
+            id="WeightedDirichlet.mutationRates",
+            spec="beastlabs.math.distributions.WeightedDirichlet")
+        alpha = etree.SubElement(distr, "parameter",
+            id="dirichletAlpha.mutationRates", spec="parameter.RealParameter",
+            dimension=str(len(parts)), estimate="false", name="alpha")
+        alpha.text = "1.0"
+        # weights reference the meaning-count weightparameter defined on the
+        # fixed-mean DeltaExchange operator, so prior and operator share it.
+        etree.SubElement(distr, "weights", idref="weightparameter")
+
     def _add_substmodel(self, partition, siteModel):
         return siteModel
 
@@ -324,22 +382,33 @@ class Converter(object):
         substModel.getparent().remove(substModel)
 
     def _convert_operators(self):
-        path = ".//operator[starts-with(@id, 'mutationRateScaler.s:')]"
-        mrs = self.root.xpath(path)
-        if len(mrs) == 0: # Simon likes to delete these from one partiton runs. Make one up
-            # <operator id="mutationRateScaler.s:hand" spec="ScaleOperator" parameter="@mutationRate.s:hand" scaleFactor="0.5" weight="0.1"/>
-            mrs = etree.Element("operator",
-                id="mutationRateScaler.s:dummy", spec="ScaleOperator", parameter="@mutationRate.s:dummy",
-                scaleFactor="0.5", weight="0.1")
+        # Fixed-mean, meaning-count-weighted relative rates (King 2026): replace
+        # the per-partition mutationRateScaler ScaleOperators (independent, free
+        # mean -> non-identifiable with the clock rate -> poor mixing) with a
+        # single DeltaExchangeOperator whose weightvector is the per-partition
+        # meaning count. This pins the meaning-weighted mean rate at 1.
+        for o in self.root.xpath(".//operator[starts-with(@id, 'mutationRateScaler.s:')]"):
+            o.getparent().remove(o)
+        self._add_fixmeanrate_operator()
 
-            # find last operator
-            last = self.root.xpath(".//operator")[-1]
-            last.getparent().append(mrs)
-            parent = last.getparent()
-            index = parent.index(last)
-            parent.insert(index + 1, mrs)
-            
-        self.replace(path, id="mutationRateScaler.s:{}", parameter="@mutationRate.s:{}")
+    def _add_fixmeanrate_operator(self):
+        parts = list(self.partitions)
+        if len(parts) < 2:
+            return  # nothing to balance with a single partition
+        weights = self.get_partition_weights()
+        op = etree.Element("operator",
+            id="FixMeanMutationRatesOperator",
+            spec="operator.kernel.BactrianDeltaExchangeOperator",
+            delta="0.75", weight="2.0")
+        for p in parts:
+            etree.SubElement(op, "parameter", idref=f"mutationRate.s:{p}")
+        # the shared meaning-count weightvector; the WeightedDirichlet prior
+        # references this by id (King 2026: prior and operator use one weighting).
+        wv = etree.SubElement(op, "weightvector",
+            id="weightparameter", spec="parameter.IntegerParameter",
+            dimension=str(len(parts)), estimate="false", lower="0", upper="0")
+        wv.text = " ".join(str(int(weights[p])) for p in parts)
+        self.root.xpath(".//run[@id='mcmc']")[0].append(op)
 
     def _convert_log(self):
         # <log idref="treeLikelihood.hand"/>
@@ -518,15 +587,23 @@ class CTMCConverter(Converter):
         f = new.xpath('frequencies')[0]
         f.set('frequencies', f'@freqParameter.s:{partition}')
         siteModel.insert(0, new)
-        
-        # handle gamma by removing it being estimated
+
+        # gamma: when the source analysis estimates a gamma shape
+        # (gammaCategoryCount > 1) reference the per-partition estimated
+        # gammaShape.s:<p> (created in _convert_state); otherwise add a fixed
+        # estimate=false shape. Previously this always inserted an inert
+        # estimate=false gammaShape, duplicating the estimated state parameter's
+        # id and leaving gamma switched off (gammaCategoryCount was also forced
+        # to 1 via get_gamma()).
         if 'shape' in siteModel.attrib:
-            del(siteModel.attrib['shape'])
-        
-        gammaShape = etree.SubElement(siteModel, "parameter",
-            id=f"gammaShape.s:{partition}", spec="parameter.RealParameter", estimate="false", name="shape")
-        gammaShape.text = '1.0'
-        siteModel.append(gammaShape)
+            del siteModel.attrib['shape']
+        if self.get_gamma() > 1:
+            siteModel.set('shape', f"@gammaShape.s:{partition}")
+        else:
+            gammaShape = etree.SubElement(siteModel, "parameter",
+                id=f"gammaShape.s:{partition}", spec="parameter.RealParameter",
+                estimate="false", name="shape")
+            gammaShape.text = '1.0'
         return siteModel
         
     def _convert_operators(self):
