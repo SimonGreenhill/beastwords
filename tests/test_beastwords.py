@@ -262,13 +262,23 @@ def test_convert_state_ctmc(request, fixture):
 def test_convert_prior(request, fixture):
     m = request.getfixturevalue(fixture)
     m._convert_prior()
-    # King 2026 fixed-mean scheme: partition rates carry no explicit per-partition
-    # prior (their meaning-weighted mean is pinned by the DeltaExchange operator).
-    # The old improper per-partition OneOnX MutationRatePriors must be gone.
+    # King 2026: the old improper per-partition OneOnX MutationRatePriors are
+    # replaced by one explicit meaning-count-weighted Dirichlet over all rates.
     assert len(get_all(m.tree, 'prior', 'MutationRatePrior.s')) == 0, "per-partition rate priors should be removed"
     assert not has_id(m.tree, 'prior', 'MutationRatePrior.s:overall'), "should have removed old one"
     for p in m.partitions:
         assert not has_id(m.tree, 'prior', f'MutationRatePrior.s:{p}'), f"{p} should have no rate prior"
+
+    if len(m.partitions) > 1:
+        dist = m.tree.xpath(".//distribution[@id='mutationRates.prior']")
+        assert dist, "missing WeightedDirichlet mutationRates.prior"
+        # rates concatenated into one vector, in partition order
+        args = [a.get('idref') for a in dist[0].xpath("./x/arg")]
+        assert args == [f"mutationRate.s:{p}" for p in m.partitions]
+        distr = dist[0].xpath("./distr")[0]
+        assert 'WeightedDirichlet' in distr.get('spec')
+        # prior shares the operator's weightparameter
+        assert distr.xpath("./weights")[0].get('idref') == 'weightparameter'
 
 
 @pytest.mark.parametrize("fixture", COVARION_MODELS)
@@ -370,15 +380,17 @@ def test_convert_operators(request, fixture):
         assert not m.tree.xpath(f".//operator[@id='mutationRateScaler.s:{p}']"), \
             f"mutationRateScaler.s:{p} should be removed"
 
-    op = m.tree.xpath(".//operator[@id='FixMeanMutationRates']")
+    op = m.tree.xpath(".//operator[@id='FixMeanMutationRatesOperator']")
     assert op, "missing fixed-mean DeltaExchange operator"
     op = op[0]
-    assert op.get('spec') == 'DeltaExchangeOperator'
+    assert 'DeltaExchangeOperator' in op.get('spec')
     # one <parameter idref> per partition
     refs = [c.get('idref') for c in op.xpath('./parameter')]
     assert refs == [f"mutationRate.s:{p}" for p in m.partitions]
-    # weightvector = meaning count per partition, in the same order
+    # weightvector = meaning count per partition, in the same order; the
+    # WeightedDirichlet prior shares it by id ("weightparameter").
     wv = op.xpath('./weightvector')[0]
+    assert wv.get('id') == 'weightparameter'
     assert wv.get('dimension') == str(len(m.partitions))
     weights = [int(x) for x in wv.text.split()]
     expected = [m.get_partition_weights()[p] for p in m.partitions]

@@ -239,15 +239,44 @@ class Converter(object):
 
     def _convert_prior(self):
         prior = self.root.xpath(".//distribution[@id='prior']")[0]
-        # Fixed-mean, meaning-count-weighted relative rates (King 2026): the
-        # partition rates carry no explicit per-partition prior; their
-        # meaning-weighted mean is pinned at 1 by the DeltaExchange operator
-        # (see _convert_operators). Drop any source per-partition mutation-rate
-        # prior -- these were previously replicated per partition with an
-        # improper OneOnX distribution, which both biases estimates (King 2026)
-        # and is flagged by beastcheck.
+        # King 2026: replace the per-partition mutation-rate priors (previously
+        # replicated per partition with an improper OneOnX distribution) with a
+        # single explicit, meaning-count-weighted Dirichlet prior over all the
+        # partition rates (see _add_fixmeanrate_prior). This both removes the
+        # improper prior and applies King's meaning-count weighting.
         for o in prior.xpath(".//prior[starts-with(@id, 'MutationRatePrior.s:')]"):
             o.getparent().remove(o)
+        self._add_fixmeanrate_prior()
+
+    def _add_fixmeanrate_prior(self):
+        """Explicit meaning-count-weighted Dirichlet prior on the partition rates.
+
+        Concatenates the per-partition mutationRate scalars into one vector
+        (feast.Concatenate) and places a beastlabs WeightedDirichlet on it. The
+        meaning-count weights live in a single ``mutationRateWeights`` parameter
+        that is shared with the fixed-mean DeltaExchange operator, so the prior
+        and the operator use identical weighting (King 2026).
+        """
+        parts = list(self.partitions)
+        if len(parts) < 2:
+            return
+        prior = self.root.xpath(".//distribution[@id='prior']")[0]
+        dist = etree.SubElement(prior, "distribution",
+            id="mutationRates.prior", spec="distribution.Prior")
+        x = etree.SubElement(dist, "x",
+            id="mutationRates", spec="feast.function.Concatenate")
+        for p in parts:
+            etree.SubElement(x, "arg", idref=f"mutationRate.s:{p}")
+        distr = etree.SubElement(dist, "distr",
+            id="WeightedDirichlet.mutationRates",
+            spec="beastlabs.math.distributions.WeightedDirichlet")
+        alpha = etree.SubElement(distr, "parameter",
+            id="dirichletAlpha.mutationRates", spec="parameter.RealParameter",
+            dimension=str(len(parts)), estimate="false", name="alpha")
+        alpha.text = "1.0"
+        # weights reference the meaning-count weightparameter defined on the
+        # fixed-mean DeltaExchange operator, so prior and operator share it.
+        etree.SubElement(distr, "weights", idref="weightparameter")
 
     def _add_substmodel(self, partition, siteModel):
         return siteModel
@@ -368,14 +397,16 @@ class Converter(object):
             return  # nothing to balance with a single partition
         weights = self.get_partition_weights()
         op = etree.Element("operator",
-            id="FixMeanMutationRates", spec="DeltaExchangeOperator",
-            weight=str(round(max(3.0, len(parts) * 0.1), 1)),
-            delta="0.10", autoOptimize="true")
+            id="FixMeanMutationRatesOperator",
+            spec="operator.kernel.BactrianDeltaExchangeOperator",
+            delta="0.75", weight="2.0")
         for p in parts:
             etree.SubElement(op, "parameter", idref=f"mutationRate.s:{p}")
+        # the shared meaning-count weightvector; the WeightedDirichlet prior
+        # references this by id (King 2026: prior and operator use one weighting).
         wv = etree.SubElement(op, "weightvector",
-            id="mutationRateWeights", spec="parameter.IntegerParameter",
-            dimension=str(len(parts)), estimate="false")
+            id="weightparameter", spec="parameter.IntegerParameter",
+            dimension=str(len(parts)), estimate="false", lower="0", upper="0")
         wv.text = " ".join(str(int(weights[p])) for p in parts)
         self.root.xpath(".//run[@id='mcmc']")[0].append(op)
 
