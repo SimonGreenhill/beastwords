@@ -39,6 +39,21 @@ beastwords -p 1-10,11-20 covarion.xml covarion.groups.xml
 ```
 
 
+### Convert the clock model
+
+Swap the clock model while converting (default: keep the source clock). Supports
+`strict` and `orc` (Optimised Relaxed Clock; requires the BEAST2 ORC package):
+
+```shell
+beastwords --clock orc covarion.xml covarion.orc.xml
+beastwords -p 5 --clock strict covarion.xml covarion.5parts.strict.xml
+```
+
+The clock is a single shared model, independent of partitioning. A fixed source
+clock rate is carried over as a fixed mean; an estimated one keeps its prior and
+operators. ORC sizes the per-branch rate vector to the taxon count automatically.
+
+
 ## beastsitedistr can help you choose sizes:
 
 Print a histogram of current partition sizes. In the below figure, there are 11 words with 11 sites (=cognate sets). 

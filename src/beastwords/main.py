@@ -7,13 +7,15 @@ from lxml import etree
 from warnings import warn
 
 from beastwords.utils import repartition_by_size, repartition_by_groupsize
+from beastwords.clocks import convert_clock
 
 
 class Converter(object):
-    
+
     userDataType_spec = '?'
     useAmbiguities = 'false'
-    
+    clock: str | None = None  # target clock ("strict"/"orc"); None preserves source
+
     def __init__(self, xmlfile, tree=None, root=None, model=None):
         if not xmlfile.exists():
             raise IOError(f"File {xmlfile} does not exist")
@@ -417,6 +419,10 @@ class Converter(object):
         self.replace(".//log[starts-with(@idref, 'mutationRate.s')]", idref="mutationRate.s:{}")
     
     def convert(self):
+        if self.clock is not None:
+            # swap the clock on the single-partition XML first; the shared
+            # branchRateModel is then cloned per partition by the normal pipeline
+            convert_clock(self.root, self.clock)
         self._convert_sequences() # should go first i think
         self._convert_state()
         self._convert_prior()
@@ -646,9 +652,14 @@ def main():
         '-p', "--partitions", dest='partitions', default=None, type=str,
         help="set partition number. If this is None use words", action='store'
     )
+    parser.add_argument(
+        '-c', "--clock", dest='clock', default=None, choices=['strict', 'orc'],
+        help="convert the clock model (default: preserve the source clock)"
+    )
     args = parser.parse_args()
-    
+
     xml = Converter.from_file(args.input)
+    xml.clock = args.clock
     if args.partitions:
         xml.set_partitions(args.partitions)
     xml.convert()
